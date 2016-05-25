@@ -5,12 +5,40 @@
 
 #include <iostream>
 
-#include <cstdlib>
-
 #define ARRAY_SIZE(a) (sizeof(a) / sizeof(a[0]))
 
 #define APP_NAME "Vulkan FTW"
 #define ENGINE_NAME "YOLORenderSQUAD"
+
+#define GET_INSTANCE_PROC_ADDR(inst, entrypoint)\
+	{\
+		fp.##entrypoint = (PFN_vk##entrypoint)vkGetInstanceProcAddr(inst, "vk" #entrypoint);\
+	}
+
+#define GET_DEVICE_PROC_ADDR(dev, entrypoint)\
+	{\
+		fp.##entrypoint = (PFN_vk##entrypoint)vkGetDeviceProcAddr(dev, "vk" #entrypoint);\
+	}
+
+
+static struct
+{
+	PFN_vkGetPhysicalDeviceSurfaceSupportKHR
+		GetPhysicalDeviceSurfaceSupportKHR;
+	PFN_vkGetPhysicalDeviceSurfaceCapabilitiesKHR
+		GetPhysicalDeviceSurfaceCapabilitiesKHR;
+	PFN_vkGetPhysicalDeviceSurfaceFormatsKHR
+		GetPhysicalDeviceSurfaceFormatsKHR;
+	PFN_vkGetPhysicalDeviceSurfacePresentModesKHR
+		GetPhysicalDeviceSurfacePresentModesKHR;
+
+	PFN_vkCreateSwapchainKHR CreateSwapchainKHR;
+	PFN_vkDestroySwapchainKHR DestroySwapchainKHR;
+	PFN_vkGetSwapchainImagesKHR GetSwapchainImagesKHR;
+	PFN_vkAcquireNextImageKHR AcquireNextImageKHR;
+	PFN_vkQueuePresentKHR QueuePresentKHR;
+} fp;
+
 
 
 static HINSTANCE	win_instance;
@@ -39,6 +67,9 @@ static VkPhysicalDevice			vk_gpu;
 static uint32_t					vk_queue_count = 0;
 static VkQueueFamilyProperties*	vk_queue_props = nullptr;
 
+static VkSurfaceKHR				vk_surface;
+static uint32_t					vk_graphics_queue_index;
+
 
 
 static void create_window();
@@ -47,6 +78,7 @@ int main(int, char**);
 int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int);
 
 static void vk_init();
+static void vk_init_swapchain();
 static void vk_shutdown();
 
 
@@ -317,6 +349,91 @@ vk_init()
 		}
 		assert(elected_queue_index < vk_queue_count);
 	}
+
+	GET_INSTANCE_PROC_ADDR(vk_instance, GetPhysicalDeviceSurfaceSupportKHR);
+	GET_INSTANCE_PROC_ADDR(vk_instance, GetPhysicalDeviceSurfaceCapabilitiesKHR);
+	GET_INSTANCE_PROC_ADDR(vk_instance, GetPhysicalDeviceSurfaceFormatsKHR);
+	GET_INSTANCE_PROC_ADDR(vk_instance, GetPhysicalDeviceSurfacePresentModesKHR);
+	GET_INSTANCE_PROC_ADDR(vk_instance, GetSwapchainImagesKHR);
+}
+
+
+static void
+vk_init_swapchain()
+{
+	VkResult	error;
+
+	// CREATE VKSURFACE
+	{
+		VkWin32SurfaceCreateInfoKHR		create_info;
+		create_info.sType = VK_STRUCTURE_TYPE_WIN32_SURFACE_CREATE_INFO_KHR;
+		create_info.pNext = nullptr;
+		create_info.flags = 0;
+		create_info.hinstance = win_instance;
+		create_info.hwnd = window_handle;
+
+		error = vkCreateWin32SurfaceKHR(vk_instance, &create_info, nullptr, &vk_surface);
+		assert(!error);
+	}
+
+	{
+		VkBool32* supports_present = new VkBool32[vk_queue_count];
+		for (uint32_t i = 0; i < vk_queue_count; ++i)
+		{
+			fp.GetPhysicalDeviceSurfaceSupportKHR(vk_gpu, i, vk_surface, &supports_present[i]);
+		}
+
+		uint32_t graphics_queue_node_index = UINT32_MAX;
+		uint32_t present_queue_node_index = UINT32_MAX;
+		for (uint32_t i = 0; i < vk_queue_count; ++i)
+		{
+			if (vk_queue_props[i].queueFlags & VK_QUEUE_GRAPHICS_BIT)
+			{
+				if (supports_present[i] == VK_TRUE)
+				{
+					graphics_queue_node_index = i;
+					present_queue_node_index = i;
+					break;
+				}
+			}
+		}
+		assert(graphics_queue_node_index != UINT32_MAX && present_queue_node_index != UINT32_MAX && present_queue_node_index == graphics_queue_node_index);
+
+		vk_graphics_queue_index = graphics_queue_node_index;
+
+		delete[] supports_present;
+	}
+
+	// CREATE DEVICE
+	{
+		float queue_priorities[1] = { 0.0 };
+
+		VkDeviceQueueCreateInfo queue_info;
+		queue_info.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
+		queue_info.pNext = nullptr;
+		queue_info.queueFamilyIndex = vk_graphics_queue_index;
+		queue_info.queueCount = 1;
+		queue_info.pQueuePriorities = queue_priorities;
+
+		VkDeviceCreateInfo device_info;
+		device_info.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
+		device_info.pNext = nullptr;
+		device_info.queueCreateInfoCount = 1;
+		device_info.pQueueCreateInfos = &queue_info;
+		if (vk_validate)
+		{
+			device_info.enabledLayerCount = (uint32_t)ARRAY_SIZE(vk_instance_layers);
+			device_info.ppEnabledLayerNames = vk_instance_layers;
+		}
+		else
+		{
+			device_info.enabledLayerCount = 0;
+			device_info.ppEnabledLayerNames = nullptr;
+		}
+		// TODO: Add extension names. (ref cube.c:2759)
+
+	}
+
 }
 
 
