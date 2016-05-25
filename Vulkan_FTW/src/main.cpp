@@ -1,4 +1,9 @@
 #include <windows.h>
+#include <assert.h>
+
+#include <vulkan/vulkan.h>
+
+#include <iostream>
 
 static HINSTANCE	win_instance;
 static LPCSTR		win_class_name = "vulkan_render_window";
@@ -7,9 +12,15 @@ static LONG			win_width = 800;
 static LONG			win_height = 640;
 static HWND			window_handle;
 
+static bool			vk_validate = true; // Tells the application if it should load Vulkan's validation layers.
+
+
 static void create_window();
 LRESULT CALLBACK WndProc(HWND, UINT, WPARAM, LPARAM);
+int main(int, char**);
 int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int);
+
+static void vk_init();
 
 
 static void
@@ -31,7 +42,7 @@ create_window()
 	win_class.hIconSm = LoadIcon(NULL, IDI_WINLOGO);
 
 	// NOTE: This returns a bool that can be tested if the call fails.
-	RegisterClassEx(&win_class);
+	assert(RegisterClassEx(&win_class));
 
 	RECT win_rect = { 0, 0, win_width, win_height };
 	AdjustWindowRect(&win_rect, WS_OVERLAPPEDWINDOW, FALSE);
@@ -46,6 +57,7 @@ create_window()
 								   NULL);
 
 	// NOTE: We could check if the window was created here.
+	assert(window_handle);
 }
 
 
@@ -69,15 +81,25 @@ WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 }
 
 
+int
+main(int, char**)
+{
+	return WinMain(GetModuleHandle(nullptr), nullptr, nullptr, SW_SHOW);
+}
+
+
 int WINAPI 
 WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int)
 {
+	// TODO: Add an argument parser in order to
+	//		 - enable/disable validation layers
 	MSG		msg;
 	bool	run = true;
 
 	win_instance = hInstance;
 
 	create_window();
+	vk_init();
 
 	while (run)
 	{
@@ -89,7 +111,40 @@ WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int)
 			TranslateMessage(&msg);
 			DispatchMessage(&msg);
 		}
+
+		RedrawWindow(window_handle, NULL, NULL, RDW_INTERNALPAINT);
 	}
 
 	return (int)msg.wParam;
 }
+
+
+static void
+vk_init()
+{
+	VkResult	error;
+	uint32_t	instance_layer_count = 0;
+
+	if (vk_validate)
+	{
+		error = vkEnumerateInstanceLayerProperties(&instance_layer_count, nullptr);
+		assert(!error);
+
+		if (instance_layer_count > 0)
+		{
+			VkLayerProperties* instance_layers = new VkLayerProperties[instance_layer_count];
+
+			error = vkEnumerateInstanceLayerProperties(&instance_layer_count, instance_layers);
+			assert(!error);
+
+			for (uint32_t i = 0; i < instance_layer_count; ++i)
+			{
+				VkLayerProperties& layer_prop = instance_layers[i];
+				std::cout << layer_prop.layerName << " : " << layer_prop.description << std::endl;
+			}
+
+			delete[] instance_layers;
+		}
+	}
+}
+
