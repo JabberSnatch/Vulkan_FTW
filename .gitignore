@@ -4,3 +4,5 @@ Intermediate/*
 .vs/*
 *.opensdf
 *.sdf
+*.opendb
+*.db

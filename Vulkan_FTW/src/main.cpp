@@ -4,6 +4,7 @@
 #include <vulkan/vulkan.h>
 
 #include <iostream>
+#include <vector>
 
 #define ARRAY_SIZE(a) (sizeof(a) / sizeof(a[0]))
 
@@ -60,6 +61,10 @@ static char*		vk_instance_extensions[] = {
 static char*		vk_device_extensions[] = {
 	"VK_KHR_swapchain"
 };
+// NOTE: An Instance-enabled layer becomes available to the Device.
+static std::vector<char*>		vk_enabled_layers;
+// NOTE: Device and Instance have their separate list of extensions.
+static std::vector<char*>		vk_enabled_extensions;
 
 static VkInstance				vk_instance;
 
@@ -70,6 +75,7 @@ static VkQueueFamilyProperties*	vk_queue_props = nullptr;
 static VkSurfaceKHR				vk_surface;
 static uint32_t					vk_graphics_queue_index;
 
+static VkDevice					vk_device;
 
 
 static void create_window();
@@ -159,6 +165,7 @@ WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int)
 
 	create_window();
 	vk_init();
+	vk_init_swapchain();
 
 	while (run)
 	{
@@ -214,6 +221,7 @@ vk_init()
 					{
 						expected_ok = !strcmp(expected_layer, instance_layers[available].layerName);
 					}
+					if (expected_ok) vk_enabled_layers.push_back(expected_layer);
 					validation_ok &= expected_ok;
 				}
 			}
@@ -247,6 +255,7 @@ vk_init()
 					{
 						expected_ok = !strcmp(expected_extension, instance_extensions[available].extensionName);
 					}
+					if (expected_ok) vk_enabled_extensions.push_back(expected_extension);
 					extensions_ok &= expected_ok;
 				}
 			}
@@ -277,8 +286,8 @@ vk_init()
 			instance_info.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
 			instance_info.pNext = nullptr;
 			instance_info.pApplicationInfo = &app_info;
-			instance_info.enabledLayerCount = (uint32_t)ARRAY_SIZE(vk_instance_layers);
-			instance_info.ppEnabledLayerNames = vk_instance_layers;
+			instance_info.enabledLayerCount = (uint32_t)vk_enabled_layers.size();
+			instance_info.ppEnabledLayerNames = vk_enabled_layers.data();
 			instance_info.enabledExtensionCount = (uint32_t)ARRAY_SIZE(vk_instance_extensions);
 			instance_info.ppEnabledExtensionNames = vk_instance_extensions;
 		}
@@ -301,48 +310,106 @@ vk_init()
 		vk_gpu = instance_physical_devices[0];
 		delete[] instance_physical_devices;
 	}
-	// NOTE: We assume that the application runs on a single GPU computer. Otherwise, we would 
-	//		 have to check our desired layers against the selected GPU available layers.
+
+	// MAKE SURE THAT INSTANCE LAYER WERE GIVEN TO THE DEVICE
+	{
+		uint32_t	device_layer_count = 0;
+
+		error = vkEnumerateDeviceLayerProperties(vk_gpu, &device_layer_count, 
+												 nullptr);
+		assert(!error);
+
+		if (device_layer_count)
+		{
+			VkLayerProperties* device_layers = 
+				new VkLayerProperties[device_layer_count];
+			error = vkEnumerateDeviceLayerProperties(vk_gpu, 
+													 &device_layer_count, 
+													 device_layers);
+			assert(!error);
+
+			bool validation_ok = true;
+			{
+				for (uint32_t expected = 0; 
+					 expected < (uint32_t)vk_enabled_layers.size() 
+					 && validation_ok; 
+					 ++expected)
+				{
+					char*	expected_layer = vk_enabled_layers[expected];
+					bool	expected_ok = false;
+					for (uint32_t available = 0; 
+						 available < device_layer_count && !expected_ok; 
+						 ++available)
+					{
+						expected_ok = !strcmp(expected_layer, 
+											  device_layers[available].layerName);
+					}
+					validation_ok &= expected_ok;
+				}
+			}
+			assert(validation_ok);
+		}
+	}
+
 
 	// LOOK FOR DEVICE EXPECTED EXTENSION
 	{
+		vk_enabled_extensions.clear();
 		uint32_t	device_extension_count = 0;
 
-		error = vkEnumerateDeviceExtensionProperties(vk_gpu, nullptr, &device_extension_count, nullptr);
-		assert(!error && device_extension_count);
-
-		VkExtensionProperties* device_extensions = new VkExtensionProperties[device_extension_count];
-		error = vkEnumerateDeviceExtensionProperties(vk_gpu, nullptr, &device_extension_count, device_extensions);
+		error = vkEnumerateDeviceExtensionProperties(vk_gpu, nullptr, 
+													 &device_extension_count, 
+													 nullptr);
 		assert(!error);
 
-		bool extensions_ok = true;
+		if (device_extension_count)
 		{
-			for (uint32_t expected = 0; expected < ARRAY_SIZE(vk_device_extensions) && extensions_ok; ++expected)
-			{
-				char*	expected_extension = vk_device_extensions[expected];
-				bool	expected_ok = false;
-				for (uint32_t available = 0; available < device_extension_count && !expected_ok; ++available)
-				{
-					expected_ok = !strcmp(expected_extension, device_extensions[available].extensionName);
-				}
-				extensions_ok &= expected_ok;
-			}
-		}
-		assert(extensions_ok);
+			VkExtensionProperties* device_extensions = 
+				new VkExtensionProperties[device_extension_count];
+			error = vkEnumerateDeviceExtensionProperties(vk_gpu, nullptr, 
+														 &device_extension_count, 
+														 device_extensions);
+			assert(!error);
 
-		delete[] device_extensions;																	
+			bool extensions_ok = true;
+			{
+				for (uint32_t expected = 0; 
+					 expected < ARRAY_SIZE(vk_device_extensions) && extensions_ok; 
+					 ++expected)
+				{
+					char*	expected_extension = vk_device_extensions[expected];
+					bool	expected_ok = false;
+					for (uint32_t available = 0; 
+						 available < device_extension_count && !expected_ok; 
+						 ++available)
+					{
+						expected_ok = !strcmp(expected_extension, 
+											  device_extensions[available].extensionName);
+					}
+					if (expected_ok) vk_enabled_extensions.push_back(expected_extension);
+					extensions_ok &= expected_ok;
+				}
+			}
+			assert(extensions_ok);
+
+			delete[] device_extensions;																	
+		}
 	}
 
 	// SELECT A QUEUE FROM THE PHYSICAL DEVICE
 	{
-		vkGetPhysicalDeviceQueueFamilyProperties(vk_gpu, &vk_queue_count, nullptr);
+		vkGetPhysicalDeviceQueueFamilyProperties(vk_gpu, 
+												 &vk_queue_count, 
+												 nullptr);
 		assert(vk_queue_count > 0);
 
 		vk_queue_props = new VkQueueFamilyProperties[vk_queue_count];
-		vkGetPhysicalDeviceQueueFamilyProperties(vk_gpu, &vk_queue_count, vk_queue_props);
+		vkGetPhysicalDeviceQueueFamilyProperties(vk_gpu, &vk_queue_count, 
+												 vk_queue_props);
 
 		uint32_t	elected_queue_index = 0;
-		for (elected_queue_index = 0; elected_queue_index < vk_queue_count; elected_queue_index++)
+		for (elected_queue_index = 0; elected_queue_index < vk_queue_count; 
+			 elected_queue_index++)
 		{
 			if (vk_queue_props[elected_queue_index].queueFlags & VK_QUEUE_GRAPHICS_BIT)
 				break;
@@ -380,7 +447,8 @@ vk_init_swapchain()
 		VkBool32* supports_present = new VkBool32[vk_queue_count];
 		for (uint32_t i = 0; i < vk_queue_count; ++i)
 		{
-			fp.GetPhysicalDeviceSurfaceSupportKHR(vk_gpu, i, vk_surface, &supports_present[i]);
+			fp.GetPhysicalDeviceSurfaceSupportKHR(vk_gpu, i, vk_surface, 
+												  &supports_present[i]);
 		}
 
 		uint32_t graphics_queue_node_index = UINT32_MAX;
@@ -397,7 +465,9 @@ vk_init_swapchain()
 				}
 			}
 		}
-		assert(graphics_queue_node_index != UINT32_MAX && present_queue_node_index != UINT32_MAX && present_queue_node_index == graphics_queue_node_index);
+		assert(graphics_queue_node_index != UINT32_MAX && 
+			   present_queue_node_index != UINT32_MAX && 
+			   present_queue_node_index == graphics_queue_node_index);
 
 		vk_graphics_queue_index = graphics_queue_node_index;
 
@@ -420,20 +490,15 @@ vk_init_swapchain()
 		device_info.pNext = nullptr;
 		device_info.queueCreateInfoCount = 1;
 		device_info.pQueueCreateInfos = &queue_info;
-		if (vk_validate)
-		{
-			device_info.enabledLayerCount = (uint32_t)ARRAY_SIZE(vk_instance_layers);
-			device_info.ppEnabledLayerNames = vk_instance_layers;
-		}
-		else
-		{
-			device_info.enabledLayerCount = 0;
-			device_info.ppEnabledLayerNames = nullptr;
-		}
-		// TODO: Add extension names. (ref cube.c:2759)
+		device_info.enabledLayerCount = (uint32_t)vk_enabled_layers.size();
+		device_info.ppEnabledLayerNames = vk_enabled_layers.data();
+		device_info.enabledExtensionCount = (uint32_t)vk_enabled_extensions.size();
+		device_info.ppEnabledExtensionNames = vk_enabled_extensions.data();
+		device_info.pEnabledFeatures = nullptr;
 
+		error = vkCreateDevice(vk_gpu, &device_info, nullptr, &vk_device);
+		assert(!error);
 	}
-
 }
 
 
