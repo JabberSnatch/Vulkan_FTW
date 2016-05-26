@@ -68,14 +68,19 @@ static std::vector<char*>		vk_enabled_extensions;
 
 static VkInstance				vk_instance;
 
-static VkPhysicalDevice			vk_gpu;
-static uint32_t					vk_queue_count = 0;
+static VkPhysicalDevice					vk_gpu;
+static VkPhysicalDeviceMemoryProperties	vk_memory_properties;
+
+static uint32_t					vk_queue_family_count = 0;
 static VkQueueFamilyProperties*	vk_queue_props = nullptr;
+static uint32_t					vk_elected_queue_index;
 
 static VkSurfaceKHR				vk_surface;
-static uint32_t					vk_graphics_queue_index;
+static VkFormat					vk_surface_format;
+static VkColorSpaceKHR			vk_color_space;
 
 static VkDevice					vk_device;
+static VkQueue					vk_main_queue;
 
 
 static void create_window();
@@ -398,23 +403,13 @@ vk_init()
 
 	// SELECT A QUEUE FROM THE PHYSICAL DEVICE
 	{
-		vkGetPhysicalDeviceQueueFamilyProperties(vk_gpu, 
-												 &vk_queue_count, 
+		vkGetPhysicalDeviceQueueFamilyProperties(vk_gpu, &vk_queue_family_count, 
 												 nullptr);
-		assert(vk_queue_count > 0);
+		assert(vk_queue_family_count > 0);
 
-		vk_queue_props = new VkQueueFamilyProperties[vk_queue_count];
-		vkGetPhysicalDeviceQueueFamilyProperties(vk_gpu, &vk_queue_count, 
+		vk_queue_props = new VkQueueFamilyProperties[vk_queue_family_count];
+		vkGetPhysicalDeviceQueueFamilyProperties(vk_gpu, &vk_queue_family_count, 
 												 vk_queue_props);
-
-		uint32_t	elected_queue_index = 0;
-		for (elected_queue_index = 0; elected_queue_index < vk_queue_count; 
-			 elected_queue_index++)
-		{
-			if (vk_queue_props[elected_queue_index].queueFlags & VK_QUEUE_GRAPHICS_BIT)
-				break;
-		}
-		assert(elected_queue_index < vk_queue_count);
 	}
 
 	GET_INSTANCE_PROC_ADDR(vk_instance, GetPhysicalDeviceSurfaceSupportKHR);
@@ -444,32 +439,27 @@ vk_init_swapchain()
 	}
 
 	{
-		VkBool32* supports_present = new VkBool32[vk_queue_count];
-		for (uint32_t i = 0; i < vk_queue_count; ++i)
+		VkBool32* supports_present = new VkBool32[vk_queue_family_count];
+		for (uint32_t i = 0; i < vk_queue_family_count; ++i)
 		{
 			fp.GetPhysicalDeviceSurfaceSupportKHR(vk_gpu, i, vk_surface, 
 												  &supports_present[i]);
 		}
 
-		uint32_t graphics_queue_node_index = UINT32_MAX;
-		uint32_t present_queue_node_index = UINT32_MAX;
-		for (uint32_t i = 0; i < vk_queue_count; ++i)
+		// Pick a queue that supports graphics and present
+		uint32_t candidate_queue_index = UINT32_MAX;
+		for (uint32_t i = 0; i < vk_queue_family_count; ++i)
 		{
-			if (vk_queue_props[i].queueFlags & VK_QUEUE_GRAPHICS_BIT)
+			if (vk_queue_props[i].queueFlags & VK_QUEUE_GRAPHICS_BIT &&
+				supports_present[i] == VK_TRUE)
 			{
-				if (supports_present[i] == VK_TRUE)
-				{
-					graphics_queue_node_index = i;
-					present_queue_node_index = i;
-					break;
-				}
+				candidate_queue_index = i;
+				break;
 			}
 		}
-		assert(graphics_queue_node_index != UINT32_MAX && 
-			   present_queue_node_index != UINT32_MAX && 
-			   present_queue_node_index == graphics_queue_node_index);
+		assert(candidate_queue_index != UINT32_MAX); 
 
-		vk_graphics_queue_index = graphics_queue_node_index;
+		vk_elected_queue_index = candidate_queue_index;
 
 		delete[] supports_present;
 	}
@@ -481,8 +471,8 @@ vk_init_swapchain()
 		VkDeviceQueueCreateInfo queue_info;
 		queue_info.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
 		queue_info.pNext = nullptr;
-		queue_info.queueFamilyIndex = vk_graphics_queue_index;
-		queue_info.queueCount = 1;
+		queue_info.queueFamilyIndex = vk_elected_queue_index;
+		queue_info.queueCount = vk_queue_props[vk_elected_queue_index].queueCount;
 		queue_info.pQueuePriorities = queue_priorities;
 
 		VkDeviceCreateInfo device_info;
@@ -499,6 +489,41 @@ vk_init_swapchain()
 		error = vkCreateDevice(vk_gpu, &device_info, nullptr, &vk_device);
 		assert(!error);
 	}
+
+	GET_DEVICE_PROC_ADDR(vk_device, CreateSwapchainKHR);
+	GET_DEVICE_PROC_ADDR(vk_device, DestroySwapchainKHR);
+	GET_DEVICE_PROC_ADDR(vk_device, GetSwapchainImagesKHR);
+	GET_DEVICE_PROC_ADDR(vk_device, AcquireNextImageKHR);
+	GET_DEVICE_PROC_ADDR(vk_device, QueuePresentKHR);
+
+	vkGetDeviceQueue(vk_device, vk_elected_queue_index, 0, &vk_main_queue);
+
+	// GET SURFACE FORMAT AND COLOR SPACE
+	{
+		uint32_t	format_count;
+		error = fp.GetPhysicalDeviceSurfaceFormatsKHR(vk_gpu, vk_surface,
+													  &format_count, nullptr);
+		assert(!error);
+
+		if (format_count)
+		{
+			VkSurfaceFormatKHR* surface_formats = new VkSurfaceFormatKHR[format_count];
+			error = fp.GetPhysicalDeviceSurfaceFormatsKHR(vk_gpu, vk_surface,
+														  &format_count, surface_formats);
+			assert(!error && format_count);
+
+			if (surface_formats[0].format == VK_FORMAT_UNDEFINED)
+				vk_surface_format = VK_FORMAT_B8G8R8A8_UNORM;
+			else
+				vk_surface_format = surface_formats[0].format;
+
+			vk_color_space = surface_formats[0].colorSpace;
+
+			delete[] surface_formats;
+		}
+	}
+
+	vkGetPhysicalDeviceMemoryProperties(vk_gpu, &vk_memory_properties);
 }
 
 
