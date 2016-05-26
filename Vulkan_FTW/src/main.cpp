@@ -45,9 +45,10 @@ static struct
 static HINSTANCE	win_instance;
 static LPCSTR		win_class_name = "vulkan_render_window";
 static LPCSTR		win_app_name = APP_NAME;
-static LONG			win_width = 800;
-static LONG			win_height = 640;
+static int32_t		win_width = 800;
+static int32_t		win_height = 600;
 static HWND			window_handle;
+
 
 static bool			vk_validate = true; // Tells the application if it should load Vulkan's validation layers.
 static char*		vk_instance_layers[] = {
@@ -79,8 +80,11 @@ static VkSurfaceKHR				vk_surface;
 static VkFormat					vk_surface_format;
 static VkColorSpaceKHR			vk_color_space;
 
+static VkSwapchainKHR			vk_swapchain;
+
 static VkDevice					vk_device;
 static VkQueue					vk_main_queue;
+static VkCommandPool			vk_cmd_pool;
 
 
 static void create_window();
@@ -89,6 +93,7 @@ int main(int, char**);
 int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int);
 
 static void vk_init();
+static void vk_prepare_resources();
 static void vk_shutdown();
 
 
@@ -120,7 +125,8 @@ create_window()
 								   win_app_name, 
 								   WS_OVERLAPPEDWINDOW | WS_VISIBLE | WS_SYSMENU,
 								   CW_USEDEFAULT, CW_USEDEFAULT,
-								   win_width, win_height,
+								   win_rect.right - win_rect.left, 
+								   win_rect.bottom - win_rect.top,
 								   NULL, NULL,
 								   win_instance,
 								   NULL);
@@ -169,6 +175,7 @@ WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int)
 
 	create_window();
 	vk_init();
+	vk_prepare_resources();
 
 	while (run)
 	{
@@ -515,6 +522,116 @@ vk_init()
 
 	vkGetDeviceQueue(vk_device, vk_elected_queue_index, 0, &vk_main_queue);
 	vkGetPhysicalDeviceMemoryProperties(vk_gpu, &vk_memory_properties);
+}
+
+
+static void
+vk_prepare_resources()
+{
+	VkResult error;
+
+	// CREATE SWAPCHAIN
+	// NOTE: We assume that no swapchain is destroyed. If it turns out that we do see cube.c:890
+	{
+
+		VkSurfaceCapabilitiesKHR surface_capabilities;
+		error = fp.GetPhysicalDeviceSurfaceCapabilitiesKHR(vk_gpu, vk_surface,
+														   &surface_capabilities);
+		assert(!error);
+
+		VkExtent2D swapchain_extent;
+		if (surface_capabilities.currentExtent.width == (uint32_t)-1)
+		{
+			swapchain_extent.width = win_width;
+			swapchain_extent.height = win_height;
+		}
+		else
+		{
+			swapchain_extent = surface_capabilities.currentExtent;
+			win_width = swapchain_extent.width;
+			win_height = swapchain_extent.height;
+		}
+
+		uint32_t present_mode_count = 0;
+		error = fp.GetPhysicalDeviceSurfacePresentModesKHR(vk_gpu, vk_surface,
+														   &present_mode_count,
+														   nullptr);
+		assert(!error && present_mode_count);
+
+		VkPresentModeKHR* present_modes = new VkPresentModeKHR[present_mode_count];
+		error = fp.GetPhysicalDeviceSurfacePresentModesKHR(vk_gpu, vk_surface,
+														   &present_mode_count,
+														   present_modes);
+		assert(!error);
+
+		// NOTE: VK_PRESENT_MODE_FIFO_KHR is the default mode for any driver.
+		//		 Also MAILBOX mode has v-sync. IMMEDIATE does not.
+		VkPresentModeKHR expected_present_mode = VK_PRESENT_MODE_FIFO_KHR;
+		for (uint32_t i = 0; i < present_mode_count; ++i)
+		{
+			if (present_modes[i] == VK_PRESENT_MODE_MAILBOX_KHR)
+			{
+				expected_present_mode = VK_PRESENT_MODE_MAILBOX_KHR;
+				break;
+			}
+			if (present_modes[i] == VK_PRESENT_MODE_IMMEDIATE_KHR)
+				expected_present_mode = VK_PRESENT_MODE_IMMEDIATE_KHR;
+		}
+
+		delete[] present_modes;
+
+		// NOTE: We need an additional image because reasons.
+		uint32_t expected_swapchain_images_count = surface_capabilities.minImageCount + 1;
+		if (surface_capabilities.maxImageCount > 0 &&
+			expected_swapchain_images_count > surface_capabilities.maxImageCount)
+			expected_swapchain_images_count = surface_capabilities.maxImageCount;
+
+		VkSurfaceTransformFlagBitsKHR pre_transform;
+		if (surface_capabilities.supportedTransforms & VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR)
+			pre_transform = VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR;
+		else
+			pre_transform = surface_capabilities.currentTransform;
+
+		VkSwapchainCreateInfoKHR swapchain_info;
+		swapchain_info.sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR;
+		swapchain_info.pNext = nullptr;
+		swapchain_info.flags = 0;
+		swapchain_info.surface = vk_surface;
+		swapchain_info.minImageCount = expected_swapchain_images_count;
+		swapchain_info.imageFormat = vk_surface_format;
+		swapchain_info.imageColorSpace = vk_color_space;
+		swapchain_info.imageExtent = swapchain_extent;
+		swapchain_info.imageArrayLayers = 1;
+		swapchain_info.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+		swapchain_info.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
+		swapchain_info.queueFamilyIndexCount = 0;
+		swapchain_info.pQueueFamilyIndices = nullptr;
+		swapchain_info.preTransform = pre_transform;
+		swapchain_info.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
+		swapchain_info.presentMode = expected_present_mode;
+		swapchain_info.clipped = VK_TRUE;
+		swapchain_info.oldSwapchain = nullptr;
+
+		error = fp.CreateSwapchainKHR(vk_device, &swapchain_info, nullptr, &vk_swapchain);
+		assert(!error);
+	}
+
+
+	// CREATE COMMAND POOL
+	{
+		VkCommandPoolCreateInfo cmd_pool_info;
+		cmd_pool_info.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
+		cmd_pool_info.pNext = nullptr;
+		cmd_pool_info.flags = 0;
+		cmd_pool_info.queueFamilyIndex = vk_elected_queue_index;
+	
+		error = vkCreateCommandPool(vk_device, &cmd_pool_info, nullptr, &vk_cmd_pool);
+		assert(!error);
+	}
+
+	
+
+
 }
 
 
