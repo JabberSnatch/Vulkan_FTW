@@ -89,7 +89,6 @@ int main(int, char**);
 int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int);
 
 static void vk_init();
-static void vk_init_swapchain();
 static void vk_shutdown();
 
 
@@ -170,7 +169,6 @@ WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int)
 
 	create_window();
 	vk_init();
-	vk_init_swapchain();
 
 	while (run)
 	{
@@ -417,13 +415,6 @@ vk_init()
 	GET_INSTANCE_PROC_ADDR(vk_instance, GetPhysicalDeviceSurfaceFormatsKHR);
 	GET_INSTANCE_PROC_ADDR(vk_instance, GetPhysicalDeviceSurfacePresentModesKHR);
 	GET_INSTANCE_PROC_ADDR(vk_instance, GetSwapchainImagesKHR);
-}
-
-
-static void
-vk_init_swapchain()
-{
-	VkResult	error;
 
 	// CREATE VKSURFACE
 	{
@@ -438,11 +429,12 @@ vk_init_swapchain()
 		assert(!error);
 	}
 
+	// PICK A QUEUE INDEX
 	{
 		VkBool32* supports_present = new VkBool32[vk_queue_family_count];
 		for (uint32_t i = 0; i < vk_queue_family_count; ++i)
 		{
-			fp.GetPhysicalDeviceSurfaceSupportKHR(vk_gpu, i, vk_surface, 
+			fp.GetPhysicalDeviceSurfaceSupportKHR(vk_gpu, i, vk_surface,
 												  &supports_present[i]);
 		}
 
@@ -457,7 +449,7 @@ vk_init_swapchain()
 				break;
 			}
 		}
-		assert(candidate_queue_index != UINT32_MAX); 
+		assert(candidate_queue_index != UINT32_MAX);
 
 		vk_elected_queue_index = candidate_queue_index;
 
@@ -496,8 +488,6 @@ vk_init_swapchain()
 	GET_DEVICE_PROC_ADDR(vk_device, AcquireNextImageKHR);
 	GET_DEVICE_PROC_ADDR(vk_device, QueuePresentKHR);
 
-	vkGetDeviceQueue(vk_device, vk_elected_queue_index, 0, &vk_main_queue);
-
 	// GET SURFACE FORMAT AND COLOR SPACE
 	{
 		uint32_t	format_count;
@@ -523,6 +513,7 @@ vk_init_swapchain()
 		}
 	}
 
+	vkGetDeviceQueue(vk_device, vk_elected_queue_index, 0, &vk_main_queue);
 	vkGetPhysicalDeviceMemoryProperties(vk_gpu, &vk_memory_properties);
 }
 
