@@ -22,6 +22,24 @@
 	}
 
 
+struct SwapchainBuffer
+{
+	VkImage				image;
+	VkCommandBuffer		cmd;
+	VkImageView			view;
+};
+
+struct DepthBuffer
+{
+	VkFormat				format;
+	VkImage					image;
+	VkImageView				view;
+	VkMemoryAllocateInfo	mem_alloc_info;
+	VkDeviceMemory			memory;
+};
+
+
+
 static struct
 {
 	PFN_vkGetPhysicalDeviceSurfaceSupportKHR
@@ -45,8 +63,8 @@ static struct
 static HINSTANCE	win_instance;
 static LPCSTR		win_class_name = "vulkan_render_window";
 static LPCSTR		win_app_name = APP_NAME;
-static int32_t		win_width = 800;
-static int32_t		win_height = 600;
+static uint32_t		win_width = 800;
+static uint32_t		win_height = 600;
 static HWND			window_handle;
 
 
@@ -81,6 +99,10 @@ static VkFormat					vk_surface_format;
 static VkColorSpaceKHR			vk_color_space;
 
 static VkSwapchainKHR			vk_swapchain;
+static uint32_t					vk_swapchain_image_count;
+static SwapchainBuffer*			vk_swapchain_buffers;
+
+static DepthBuffer				vk_depth_buffer;
 
 static VkDevice					vk_device;
 static VkQueue					vk_main_queue;
@@ -118,7 +140,7 @@ create_window()
 	// NOTE: This returns a bool that can be tested if the call fails.
 	assert(RegisterClassEx(&win_class));
 
-	RECT win_rect = { 0, 0, win_width, win_height };
+	RECT win_rect = { 0, 0, (int32_t)win_width, (int32_t)win_height };
 	AdjustWindowRect(&win_rect, WS_OVERLAPPEDWINDOW, FALSE);
 	window_handle = CreateWindowEx(0, 
 								   win_class_name, 
@@ -615,6 +637,110 @@ vk_prepare_resources()
 		error = fp.CreateSwapchainKHR(vk_device, &swapchain_info, nullptr, &vk_swapchain);
 		assert(!error);
 	}
+
+	// CREATE SWAPCHAIN IMAGES
+	{
+		error = fp.GetSwapchainImagesKHR(vk_device, vk_swapchain, 
+										 &vk_swapchain_image_count, nullptr);
+		assert(!error && vk_swapchain_image_count);
+
+		VkImage* swapchain_images = new VkImage[vk_swapchain_image_count];
+		error = fp.GetSwapchainImagesKHR(vk_device, vk_swapchain,
+										 &vk_swapchain_image_count, swapchain_images);
+		assert(!error);
+
+		vk_swapchain_buffers = new SwapchainBuffer[vk_swapchain_image_count];
+
+		for (uint32_t i = 0; i < vk_swapchain_image_count; ++i)
+		{
+			vk_swapchain_buffers[i].image = swapchain_images[i];
+
+			VkImageViewCreateInfo image_view_info;
+			image_view_info.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+			image_view_info.pNext = nullptr;
+			image_view_info.flags = 0;
+			image_view_info.image = vk_swapchain_buffers[i].image;
+			image_view_info.viewType = VK_IMAGE_VIEW_TYPE_2D;
+			image_view_info.format = vk_surface_format;
+			image_view_info.components = {
+				VK_COMPONENT_SWIZZLE_R,
+				VK_COMPONENT_SWIZZLE_G,
+				VK_COMPONENT_SWIZZLE_B,
+				VK_COMPONENT_SWIZZLE_A
+			};
+			image_view_info.subresourceRange = {
+				VK_IMAGE_ASPECT_COLOR_BIT,
+				0, 1, 0, 1
+			};
+
+			error = vkCreateImageView(vk_device, &image_view_info, nullptr, 
+									  &vk_swapchain_buffers[i].view);
+			assert(!error);
+		}
+	}
+
+	// CREATE DEPTH BUFFER
+	{
+		VkFormat			depth_format = VK_FORMAT_D16_UNORM;
+
+		VkImageCreateInfo	image_info;
+		image_info.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+		image_info.pNext = nullptr;
+		image_info.flags = 0;
+		image_info.imageType = VK_IMAGE_TYPE_2D;
+		image_info.format = depth_format;
+		image_info.extent = { win_width, win_height, 1 };
+		image_info.mipLevels = 1;
+		image_info.arrayLayers = 1;
+		image_info.samples = VK_SAMPLE_COUNT_1_BIT;
+		image_info.tiling = VK_IMAGE_TILING_OPTIMAL;
+		image_info.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
+		image_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+		image_info.queueFamilyIndexCount = 0;
+		image_info.pQueueFamilyIndices = nullptr;
+		// NOTE: There might be some better options out there
+		image_info.initialLayout = VK_IMAGE_LAYOUT_GENERAL; 
+
+		VkImageViewCreateInfo	view_info;
+		view_info.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+		view_info.pNext = nullptr;
+		view_info.flags = 0;
+		view_info.image = VK_NULL_HANDLE;
+		view_info.viewType = VK_IMAGE_VIEW_TYPE_2D;
+		view_info.format = depth_format;
+		view_info.subresourceRange = { 
+			VK_IMAGE_ASPECT_DEPTH_BIT,
+			0, 1, 0, 1
+		};
+
+		error = vkCreateImage(vk_device, &image_info, nullptr, &vk_depth_buffer.image);
+		assert(!error);
+
+		VkMemoryRequirements image_mem_reqs;
+		vkGetImageMemoryRequirements(vk_device, vk_depth_buffer.image, &image_mem_reqs);
+
+		vk_depth_buffer.mem_alloc_info.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+		vk_depth_buffer.mem_alloc_info.pNext = nullptr;
+		vk_depth_buffer.mem_alloc_info.allocationSize = image_mem_reqs.size;
+
+		// TODO: Finish this shit
+		vk_depth_buffer.mem_alloc_info.memoryTypeIndex = UINT32_MAX;
+		{
+			uint32_t type_bits = image_mem_reqs.memoryTypeBits;
+			for (uint32_t i = 0; i < vk_memory_properties.memoryTypeCount; ++i)
+			{
+				if (!(type_bits & 1 << i))
+				{
+					vk_depth_buffer.mem_alloc_info.memoryTypeIndex = i;
+					break;
+				}
+			}
+		}
+		assert(vk_depth_buffer.mem_alloc_info.memoryTypeIndex != UINT32_MAX);
+
+		vk_depth_buffer.format = depth_format;
+	}
+
 
 
 	// CREATE COMMAND POOL
