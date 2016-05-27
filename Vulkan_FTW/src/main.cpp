@@ -763,18 +763,6 @@ vk_prepare_resources()
 		// NOTE: There might be some better options out there
 		image_info.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED; 
 
-		VkImageViewCreateInfo	view_info;
-		view_info.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-		view_info.pNext = nullptr;
-		view_info.flags = 0;
-		view_info.image = VK_NULL_HANDLE;
-		view_info.viewType = VK_IMAGE_VIEW_TYPE_2D;
-		view_info.format = depth_format;
-		view_info.subresourceRange = { 
-			VK_IMAGE_ASPECT_DEPTH_BIT,
-			0, 1, 0, 1
-		};
-
 		error = vkCreateImage(vk_device, &image_info, nullptr, &vk_depth_buffer.image);
 		assert(!error);
 
@@ -804,12 +792,33 @@ vk_prepare_resources()
 								 nullptr, &vk_depth_buffer.memory);
 		assert(!error);
 
+		error = vkBindImageMemory(vk_device, vk_depth_buffer.image, 
+								  vk_depth_buffer.memory, 0);
+		assert(!error);
+
 		vk_set_image_layout(vk_depth_buffer.image, VK_IMAGE_ASPECT_DEPTH_BIT,
 							VK_IMAGE_LAYOUT_UNDEFINED,
 							VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
 							(VkAccessFlagBits)0);
 
+		VkImageViewCreateInfo	view_info;
+		view_info.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+		view_info.pNext = nullptr;
+		view_info.flags = 0;
 		view_info.image = vk_depth_buffer.image;
+		view_info.viewType = VK_IMAGE_VIEW_TYPE_2D;
+		view_info.format = depth_format;
+		view_info.components = {
+			VK_COMPONENT_SWIZZLE_IDENTITY,
+			VK_COMPONENT_SWIZZLE_IDENTITY,
+			VK_COMPONENT_SWIZZLE_IDENTITY,
+			VK_COMPONENT_SWIZZLE_IDENTITY
+		};
+		view_info.subresourceRange = { 
+			VK_IMAGE_ASPECT_DEPTH_BIT,
+			0, 1, 0, 1
+		};
+
 		error = vkCreateImageView(vk_device, &view_info, nullptr, 
 								  &vk_depth_buffer.view);
 		assert(!error);
