@@ -5,6 +5,7 @@
 
 #include <iostream>
 #include <vector>
+#include <string>
 
 #define ARRAY_SIZE(a) (sizeof(a) / sizeof(a[0]))
 
@@ -13,12 +14,16 @@
 
 #define GET_INSTANCE_PROC_ADDR(inst, entrypoint)\
 	{\
-		fp.##entrypoint = (PFN_vk##entrypoint)vkGetInstanceProcAddr(inst, "vk" #entrypoint);\
+		fp.##entrypoint = \
+			(PFN_vk##entrypoint)vkGetInstanceProcAddr(inst, "vk" #entrypoint);\
+		assert(fp.##entrypoint != nullptr);\
 	}
 
 #define GET_DEVICE_PROC_ADDR(dev, entrypoint)\
 	{\
-		fp.##entrypoint = (PFN_vk##entrypoint)vkGetDeviceProcAddr(dev, "vk" #entrypoint);\
+		fp.##entrypoint = \
+			(PFN_vk##entrypoint)vkGetDeviceProcAddr(dev, "vk" #entrypoint);\
+		assert(fp.##entrypoint != nullptr);\
 	}
 
 
@@ -43,19 +48,23 @@ struct DepthBuffer
 static struct
 {
 	PFN_vkGetPhysicalDeviceSurfaceSupportKHR
-		GetPhysicalDeviceSurfaceSupportKHR;
+		GetPhysicalDeviceSurfaceSupportKHR = nullptr;
 	PFN_vkGetPhysicalDeviceSurfaceCapabilitiesKHR
-		GetPhysicalDeviceSurfaceCapabilitiesKHR;
+		GetPhysicalDeviceSurfaceCapabilitiesKHR = nullptr;
 	PFN_vkGetPhysicalDeviceSurfaceFormatsKHR
-		GetPhysicalDeviceSurfaceFormatsKHR;
+		GetPhysicalDeviceSurfaceFormatsKHR = nullptr;
 	PFN_vkGetPhysicalDeviceSurfacePresentModesKHR
-		GetPhysicalDeviceSurfacePresentModesKHR;
+		GetPhysicalDeviceSurfacePresentModesKHR = nullptr;
 
-	PFN_vkCreateSwapchainKHR CreateSwapchainKHR;
-	PFN_vkDestroySwapchainKHR DestroySwapchainKHR;
-	PFN_vkGetSwapchainImagesKHR GetSwapchainImagesKHR;
-	PFN_vkAcquireNextImageKHR AcquireNextImageKHR;
-	PFN_vkQueuePresentKHR QueuePresentKHR;
+	PFN_vkCreateSwapchainKHR CreateSwapchainKHR = nullptr;
+	PFN_vkDestroySwapchainKHR DestroySwapchainKHR = nullptr;
+	PFN_vkGetSwapchainImagesKHR GetSwapchainImagesKHR = nullptr;
+	PFN_vkAcquireNextImageKHR AcquireNextImageKHR = nullptr;
+	PFN_vkQueuePresentKHR QueuePresentKHR = nullptr;
+
+	PFN_vkCreateDebugReportCallbackEXT CreateDebugReportCallbackEXT = nullptr;
+	PFN_vkDestroyDebugReportCallbackEXT DestroyDebugReportCallbackEXT = nullptr;
+	PFN_vkDebugReportMessageEXT DebugReportMessageEXT = nullptr;
 } fp;
 
 
@@ -68,7 +77,8 @@ static uint32_t		win_height = 600;
 static HWND			window_handle;
 
 
-static bool			vk_validate = true; // Tells the application if it should load Vulkan's validation layers.
+// Tells the application if it should load Vulkan's validation layers.
+static bool			vk_validate = true; 
 static char*		vk_instance_layers[] = {
 	"VK_LAYER_LUNARG_standard_validation"
 };
@@ -107,6 +117,9 @@ static DepthBuffer				vk_depth_buffer;
 static VkDevice					vk_device;
 static VkQueue					vk_main_queue;
 static VkCommandPool			vk_cmd_pool;
+static VkCommandBuffer			vk_cmd_buffer;
+
+static VkDebugReportCallbackEXT	vk_debug_callback;
 
 
 static void create_window();
@@ -115,9 +128,16 @@ int main(int, char**);
 int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int);
 
 static void vk_init();
+static void vk_setup_debug_report_callback();
 static void vk_prepare_resources();
 static void vk_shutdown();
 
+static void vk_set_image_layout(VkImage, VkImageAspectFlags, VkImageLayout, 
+								VkImageLayout, VkAccessFlagBits);
+
+VKAPI_ATTR VkBool32 VKAPI_CALL
+vk_debug_log(VkFlags, VkDebugReportObjectTypeEXT, uint64_t, size_t, int32_t,
+			 const char*, const char*, void*);
 
 static void
 create_window()
@@ -439,6 +459,9 @@ vk_init()
 												 vk_queue_props);
 	}
 
+	if (vk_validate)
+		vk_setup_debug_report_callback();
+
 	GET_INSTANCE_PROC_ADDR(vk_instance, GetPhysicalDeviceSurfaceSupportKHR);
 	GET_INSTANCE_PROC_ADDR(vk_instance, GetPhysicalDeviceSurfaceCapabilitiesKHR);
 	GET_INSTANCE_PROC_ADDR(vk_instance, GetPhysicalDeviceSurfaceFormatsKHR);
@@ -492,13 +515,15 @@ vk_init()
 		VkDeviceQueueCreateInfo queue_info;
 		queue_info.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
 		queue_info.pNext = nullptr;
+		queue_info.flags = 0;
 		queue_info.queueFamilyIndex = vk_elected_queue_index;
-		queue_info.queueCount = vk_queue_props[vk_elected_queue_index].queueCount;
+		queue_info.queueCount = 1;
 		queue_info.pQueuePriorities = queue_priorities;
 
 		VkDeviceCreateInfo device_info;
 		device_info.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
 		device_info.pNext = nullptr;
+		device_info.flags = 0;
 		device_info.queueCreateInfoCount = 1;
 		device_info.pQueueCreateInfos = &queue_info;
 		device_info.enabledLayerCount = (uint32_t)vk_enabled_layers.size();
@@ -548,9 +573,43 @@ vk_init()
 
 
 static void
+vk_setup_debug_report_callback()
+{
+	VkResult error;
+
+	GET_INSTANCE_PROC_ADDR(vk_instance, CreateDebugReportCallbackEXT);
+	GET_INSTANCE_PROC_ADDR(vk_instance, DestroyDebugReportCallbackEXT);
+	GET_INSTANCE_PROC_ADDR(vk_instance, DebugReportMessageEXT);
+
+	VkDebugReportCallbackCreateInfoEXT debug_callback_info;
+	debug_callback_info.sType = VK_STRUCTURE_TYPE_DEBUG_REPORT_CREATE_INFO_EXT;
+	debug_callback_info.pNext = nullptr;
+	debug_callback_info.pfnCallback = vk_debug_log;
+	debug_callback_info.pUserData = nullptr;
+	debug_callback_info.flags = 
+		VK_DEBUG_REPORT_ERROR_BIT_EXT | VK_DEBUG_REPORT_WARNING_BIT_EXT;
+	error = fp.CreateDebugReportCallbackEXT(vk_instance, &debug_callback_info,
+											nullptr, &vk_debug_callback);
+	assert(!error);
+}
+
+
+static void
 vk_prepare_resources()
 {
 	VkResult error;
+	
+	// CREATE COMMAND POOL
+	{
+		VkCommandPoolCreateInfo cmd_pool_info;
+		cmd_pool_info.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
+		cmd_pool_info.pNext = nullptr;
+		cmd_pool_info.flags = 0;
+		cmd_pool_info.queueFamilyIndex = vk_elected_queue_index;
+	
+		error = vkCreateCommandPool(vk_device, &cmd_pool_info, nullptr, &vk_cmd_pool);
+		assert(!error);
+	}
 
 	// CREATE SWAPCHAIN
 	// NOTE: We assume that no swapchain is destroyed. If it turns out that we do see cube.c:890
@@ -641,7 +700,7 @@ vk_prepare_resources()
 	// CREATE SWAPCHAIN IMAGES
 	{
 		error = fp.GetSwapchainImagesKHR(vk_device, vk_swapchain, 
-										 &vk_swapchain_image_count, nullptr);
+										 &vk_swapchain_image_count, nullptr);  
 		assert(!error && vk_swapchain_image_count);
 
 		VkImage* swapchain_images = new VkImage[vk_swapchain_image_count];
@@ -677,11 +736,14 @@ vk_prepare_resources()
 									  &vk_swapchain_buffers[i].view);
 			assert(!error);
 		}
+
+		delete[] swapchain_images;
 	}
 
 	// CREATE DEPTH BUFFER
 	{
 		VkFormat			depth_format = VK_FORMAT_D16_UNORM;
+		vk_depth_buffer.format = depth_format;
 
 		VkImageCreateInfo	image_info;
 		image_info.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
@@ -699,7 +761,7 @@ vk_prepare_resources()
 		image_info.queueFamilyIndexCount = 0;
 		image_info.pQueueFamilyIndices = nullptr;
 		// NOTE: There might be some better options out there
-		image_info.initialLayout = VK_IMAGE_LAYOUT_GENERAL; 
+		image_info.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED; 
 
 		VkImageViewCreateInfo	view_info;
 		view_info.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
@@ -719,17 +781,17 @@ vk_prepare_resources()
 		VkMemoryRequirements image_mem_reqs;
 		vkGetImageMemoryRequirements(vk_device, vk_depth_buffer.image, &image_mem_reqs);
 
+		// DEPTH BUFFER MEMORY ALLOCATION
 		vk_depth_buffer.mem_alloc_info.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
 		vk_depth_buffer.mem_alloc_info.pNext = nullptr;
 		vk_depth_buffer.mem_alloc_info.allocationSize = image_mem_reqs.size;
-
-		// TODO: Finish this shit
+		// NOTE: memory_type_from_properties
 		vk_depth_buffer.mem_alloc_info.memoryTypeIndex = UINT32_MAX;
 		{
 			uint32_t type_bits = image_mem_reqs.memoryTypeBits;
 			for (uint32_t i = 0; i < vk_memory_properties.memoryTypeCount; ++i)
 			{
-				if (!(type_bits & 1 << i))
+				if ((type_bits & (1 << i)))
 				{
 					vk_depth_buffer.mem_alloc_info.memoryTypeIndex = i;
 					break;
@@ -738,22 +800,23 @@ vk_prepare_resources()
 		}
 		assert(vk_depth_buffer.mem_alloc_info.memoryTypeIndex != UINT32_MAX);
 
-		vk_depth_buffer.format = depth_format;
-	}
+		error = vkAllocateMemory(vk_device, &vk_depth_buffer.mem_alloc_info,
+								 nullptr, &vk_depth_buffer.memory);
+		assert(!error);
 
+		vk_set_image_layout(vk_depth_buffer.image, VK_IMAGE_ASPECT_DEPTH_BIT,
+							VK_IMAGE_LAYOUT_UNDEFINED,
+							VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+							(VkAccessFlagBits)0);
 
-
-	// CREATE COMMAND POOL
-	{
-		VkCommandPoolCreateInfo cmd_pool_info;
-		cmd_pool_info.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
-		cmd_pool_info.pNext = nullptr;
-		cmd_pool_info.flags = 0;
-		cmd_pool_info.queueFamilyIndex = vk_elected_queue_index;
-	
-		error = vkCreateCommandPool(vk_device, &cmd_pool_info, nullptr, &vk_cmd_pool);
+		view_info.image = vk_depth_buffer.image;
+		error = vkCreateImageView(vk_device, &view_info, nullptr, 
+								  &vk_depth_buffer.view);
 		assert(!error);
 	}
+
+
+
 
 	
 
@@ -764,6 +827,127 @@ vk_prepare_resources()
 static void
 vk_shutdown()
 {
+	delete[] vk_swapchain_buffers;
 	delete[] vk_queue_props;
+
+	vkDestroyCommandPool(vk_device, vk_cmd_pool, nullptr);
+	vkDestroyDevice(vk_device, nullptr);
+
+	if (vk_validate)
+		fp.DestroyDebugReportCallbackEXT(vk_instance, 
+										 vk_debug_callback, nullptr);
+
+	vkDestroySurfaceKHR(vk_instance, vk_surface, nullptr);
+	vkDestroyInstance(vk_instance, nullptr);
 }
+
+
+static void 
+vk_set_image_layout(VkImage image, VkImageAspectFlags aspect_mask, 
+					VkImageLayout old_layout, VkImageLayout new_layout,
+					VkAccessFlagBits access_mask)
+{
+	VkResult error;
+
+	if (vk_cmd_buffer == VK_NULL_HANDLE)
+	{
+		VkCommandBufferAllocateInfo cmd_allocate_info;
+		cmd_allocate_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+		cmd_allocate_info.pNext = nullptr;
+		cmd_allocate_info.commandPool = vk_cmd_pool;
+		cmd_allocate_info.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+		cmd_allocate_info.commandBufferCount = 1;
+
+		error = vkAllocateCommandBuffers(vk_device, 
+										 &cmd_allocate_info, 
+										 &vk_cmd_buffer);
+		assert(!error);
+
+		VkCommandBufferBeginInfo cmd_begin_info;
+		cmd_begin_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+		cmd_begin_info.pNext = nullptr;
+		cmd_begin_info.flags = 0;
+		cmd_begin_info.pInheritanceInfo = nullptr;
+
+		error = vkBeginCommandBuffer(vk_cmd_buffer, &cmd_begin_info);
+		assert(!error);
+	}
+
+	VkImageMemoryBarrier image_memory_barrier;
+	image_memory_barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+	image_memory_barrier.pNext = nullptr;
+	image_memory_barrier.srcAccessMask = access_mask;
+	image_memory_barrier.dstAccessMask = 0;
+	image_memory_barrier.oldLayout = old_layout;
+	image_memory_barrier.newLayout = new_layout;
+	image_memory_barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+	image_memory_barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+	image_memory_barrier.image = image;
+	image_memory_barrier.subresourceRange = { aspect_mask, 0, 1, 0, 1 };
+
+	switch (new_layout)
+	{
+	case VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL:
+		image_memory_barrier.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+		break;
+	case VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL:
+		image_memory_barrier.dstAccessMask = 
+			VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+		break;
+	case VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL:
+		image_memory_barrier.dstAccessMask =
+			VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+		break;
+	case VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL:
+		image_memory_barrier.dstAccessMask = 
+			VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_INPUT_ATTACHMENT_READ_BIT;
+		break;
+	default: break;
+	}
+
+	vkCmdPipelineBarrier(vk_cmd_buffer, 
+						 VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+						 VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+						 0, 
+						 0, nullptr, 
+						 0, nullptr, 
+						 1, &image_memory_barrier);
+}
+
+
+VKAPI_ATTR VkBool32 VKAPI_CALL
+vk_debug_log(VkFlags msg_flags,
+			 VkDebugReportObjectTypeEXT obj_type,
+			 uint64_t src_object,
+			 size_t location, 
+			 int32_t msg_code,
+			 const char* p_layer_prefix, 
+			 const char* p_msg, 
+			 void* p_user_data)
+{
+	std::string message = "[";
+	message.append(p_layer_prefix);
+	message += "] Code ";
+	message.append(std::to_string(msg_code));
+	message += " : ";
+	message.append(p_msg);
+
+	std::string prefix = "";
+	if (msg_flags & VK_DEBUG_REPORT_ERROR_BIT_EXT)
+		prefix = "[ERROR] ";
+	else if (msg_flags & VK_DEBUG_REPORT_WARNING_BIT_EXT)
+		prefix = "[WARNING] ";
+
+	std::cout << prefix << message << std::endl;
+
+	/*
+	* false indicates that layer should not bail-out of an
+	* API call that had validation failures. This may mean that the
+	* app dies inside the driver due to invalid parameter(s).
+	* That's what would happen without validation layers, so we'll
+	* keep that behavior here.
+	*/
+	return false;
+}
+
 
