@@ -97,13 +97,18 @@
       <WarningLevel>Level3</WarningLevel>
       <Optimization>Disabled</Optimization>
       <SDLCheck>true</SDLCheck>
-      <PreprocessorDefinitions>VK_USE_PLATFORM_WIN32_KHR;_MBCS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>VK_USE_PLATFORM_WIN32_KHR;_CRT_SECURE_NO_WARNINGS;_MBCS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
     </ClCompile>
     <Link>
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <AdditionalDependencies>$(VULKAN_SDK)\Bin32\vulkan-1.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <SubSystem>Console</SubSystem>
     </Link>
+    <PostBuildEvent>
+      <Command>"$(VULKAN_SDK)\Bin\glslangValidator.exe" -V -o "$(SolutionDir)Resources\vs_test.spv" "$(SolutionDir)Resources\vs_test.vert"
+"$(VULKAN_SDK)\Bin\glslangValidator.exe" -V -o "$(SolutionDir)Resources\fs_test.spv" "$(SolutionDir)Resources\fs_test.frag"
+</Command>
+    </PostBuildEvent>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
     <ClCompile>
@@ -113,13 +118,18 @@
       <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
       <AdditionalIncludeDirectories>
       </AdditionalIncludeDirectories>
-      <PreprocessorDefinitions>VK_USE_PLATFORM_WIN32_KHR;_MBCS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>VK_USE_PLATFORM_WIN32_KHR;_CRT_SECURE_NO_WARNINGS;_MBCS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
     </ClCompile>
     <Link>
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <AdditionalDependencies>$(VULKAN_SDK)\Bin\vulkan-1.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <SubSystem>Console</SubSystem>
     </Link>
+    <PostBuildEvent>
+      <Command>"$(VULKAN_SDK)\Bin\glslangValidator.exe" -V -o "$(SolutionDir)Resources\vs_test.spv" "$(SolutionDir)Resources\vs_test.vert"
+"$(VULKAN_SDK)\Bin\glslangValidator.exe" -V -o "$(SolutionDir)Resources\fs_test.spv" "$(SolutionDir)Resources\fs_test.frag"
+</Command>
+    </PostBuildEvent>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
     <ClCompile>
@@ -128,7 +138,7 @@
       <FunctionLevelLinking>true</FunctionLevelLinking>
       <IntrinsicFunctions>true</IntrinsicFunctions>
       <SDLCheck>true</SDLCheck>
-      <PreprocessorDefinitions>VK_USE_PLATFORM_WIN32_KHR;_MBCS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>VK_USE_PLATFORM_WIN32_KHR;_CRT_SECURE_NO_WARNINGS;_MBCS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
     </ClCompile>
     <Link>
       <GenerateDebugInformation>true</GenerateDebugInformation>
@@ -136,6 +146,11 @@
       <OptimizeReferences>true</OptimizeReferences>
       <AdditionalDependencies>$(VULKAN_SDK)\Bin32\vulkan-1.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
+    <PostBuildEvent>
+      <Command>"$(VULKAN_SDK)\Bin\glslangValidator.exe" -V -o "$(SolutionDir)Resources\vs_test.spv" "$(SolutionDir)Resources\vs_test.vert"
+"$(VULKAN_SDK)\Bin\glslangValidator.exe" -V -o "$(SolutionDir)Resources\fs_test.spv" "$(SolutionDir)Resources\fs_test.frag"
+</Command>
+    </PostBuildEvent>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <ClCompile>
@@ -144,7 +159,7 @@
       <FunctionLevelLinking>true</FunctionLevelLinking>
       <IntrinsicFunctions>true</IntrinsicFunctions>
       <SDLCheck>true</SDLCheck>
-      <PreprocessorDefinitions>VK_USE_PLATFORM_WIN32_KHR;_MBCS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>VK_USE_PLATFORM_WIN32_KHR;_CRT_SECURE_NO_WARNINGS;_MBCS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
     </ClCompile>
     <Link>
       <GenerateDebugInformation>true</GenerateDebugInformation>
@@ -152,6 +167,11 @@
       <OptimizeReferences>true</OptimizeReferences>
       <AdditionalDependencies>$(VULKAN_SDK)\Bin\vulkan-1.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
+    <PostBuildEvent>
+      <Command>"$(VULKAN_SDK)\Bin\glslangValidator.exe" -V -o "$(SolutionDir)Resources\vs_test.spv" "$(SolutionDir)Resources\vs_test.vert"
+"$(VULKAN_SDK)\Bin\glslangValidator.exe" -V -o "$(SolutionDir)Resources\fs_test.spv" "$(SolutionDir)Resources\fs_test.frag"
+</Command>
+    </PostBuildEvent>
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="src\main.cpp" />
