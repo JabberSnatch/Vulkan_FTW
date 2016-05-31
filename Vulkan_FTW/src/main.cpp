@@ -121,13 +121,18 @@ static VkQueue					vk_main_queue;
 static VkCommandPool			vk_cmd_pool;
 static VkCommandBuffer			vk_cmd_buffer;
 
-static VkDescriptorSetLayout	vk_desc_set_layout;
 static VkPipelineLayout			vk_pipeline_layout;
 static VkRenderPass				vk_render_pass;
 static VkPipelineCache			vk_pipeline_cache;
 static VkPipeline				vk_pipeline;
 
+static VkDescriptorSetLayout	vk_desc_set_layout;
+static VkDescriptorPool			vk_descriptor_pool;
+static VkDescriptorSet			vk_descriptor_set;
+
 static std::unordered_map<std::string, VkShaderModule>		vk_shaders;
+
+static VkBuffer					vk_matrix_buffer;
 
 
 static VkDebugReportCallbackEXT	vk_debug_callback;
@@ -838,6 +843,46 @@ vk_prepare_resources()
 								  &vk_depth_buffer.view);
 		assert(!error);
 	}
+
+	// CREATE SWAPCHAIN CMD BUFFERS
+	{
+		VkCommandBufferAllocateInfo cmd_info;
+		cmd_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+		cmd_info.pNext = nullptr;
+		cmd_info.commandPool = vk_cmd_pool;
+		cmd_info.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+		cmd_info.commandBufferCount = 1;
+	
+		for (uint32_t i = 0; i < vk_swapchain_image_count; ++i)
+		{
+			error = vkAllocateCommandBuffers(vk_device, &cmd_info,
+											&vk_swapchain_buffers[i].cmd);
+			assert(!error);
+		}
+	}
+
+	// CREATE UNIFORM BUFFER
+	{
+		VkBufferCreateInfo buffer_info;
+		buffer_info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+		buffer_info.pNext = nullptr;
+		buffer_info.flags = 0;
+		buffer_info.size = 16 * 3 * sizeof(float);
+		buffer_info.usage = VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
+		buffer_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+		buffer_info.queueFamilyIndexCount = 0;
+		buffer_info.pQueueFamilyIndices = nullptr;
+
+		error = vkCreateBuffer(vk_device, &buffer_info, nullptr,
+							   &vk_matrix_buffer);
+		assert(!error);
+
+		VkMemoryRequirements memory_reqs;
+		vkGetBufferMemoryRequirements(vk_device, vk_matrix_buffer, 
+									  &memory_reqs);
+
+		// NOTE: cube.c:1358
+	}
 }
 
 
@@ -846,7 +891,7 @@ vk_prepare_pipeline()
 {
 	VkResult error;
 
-	// DESCRIPTOR LAYOUT
+	// DESCRIPTOR SET LAYOUT
 	{
 		VkDescriptorSetLayoutBinding layout_bindings[2];
 		layout_bindings[0].binding = 0;
@@ -885,6 +930,42 @@ vk_prepare_pipeline()
 									   &vk_pipeline_layout);
 		assert(!error);
 	}
+
+	// CREATE DESCRIPTOR POOL
+	{
+		VkDescriptorPoolSize desc_counts[2];
+		desc_counts[0].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+		desc_counts[0].descriptorCount = 1;
+		desc_counts[1].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+		desc_counts[1].descriptorCount = 1;
+
+		VkDescriptorPoolCreateInfo desc_pool_info;
+		desc_pool_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+		desc_pool_info.pNext = nullptr;
+		desc_pool_info.flags = 0;
+		desc_pool_info.maxSets = 1;
+		desc_pool_info.poolSizeCount = 1;
+		desc_pool_info.pPoolSizes = desc_counts;
+
+		error = vkCreateDescriptorPool(vk_device, &desc_pool_info, nullptr,
+									   &vk_descriptor_pool);
+		assert(!error);
+	}
+
+	// ALLOCATE DESCRIPTOR SET
+	{
+		VkDescriptorSetAllocateInfo alloc_info;
+		alloc_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+		alloc_info.pNext = nullptr;
+		alloc_info.descriptorPool = vk_descriptor_pool;
+		alloc_info.descriptorSetCount = 1;
+		alloc_info.pSetLayouts = &vk_desc_set_layout;
+		
+		error = vkAllocateDescriptorSets(vk_device, &alloc_info, 
+										 &vk_descriptor_set);
+		assert(!error);
+	}
+
 
 	// RENDER PASS
 	{
