@@ -36,6 +36,7 @@ struct SwapchainBuffer
 	VkImage				image;
 	VkCommandBuffer		cmd;
 	VkImageView			view;
+	VkFramebuffer		framebuffer;
 };
 
 struct DepthBuffer
@@ -128,8 +129,6 @@ static VkRenderPass				vk_render_pass;
 static VkPipelineCache			vk_pipeline_cache;
 static VkPipeline				vk_pipeline;
 
-static VkFramebuffer*			vk_framebuffers;
-
 static VkDescriptorSetLayout	vk_desc_set_layout;
 static VkDescriptorPool			vk_descriptor_pool;
 static VkDescriptorSet			vk_descriptor_set;
@@ -155,6 +154,8 @@ static void vk_setup_debug_report_callback();
 static void vk_prepare_resources();
 static void vk_prepare_pipeline();
 static void vk_shutdown();
+
+static void vk_record_command_buffer(SwapchainBuffer&);
 
 static void vk_set_image_layout(VkImage, VkImageAspectFlags, VkImageLayout, 
 								VkImageLayout, VkAccessFlagBits);
@@ -248,6 +249,11 @@ WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int)
 	vk_init();
 	vk_prepare_resources();
 	vk_prepare_pipeline();
+
+	for (uint32_t i = 0; i < vk_swapchain_image_count; ++i)
+	{
+		vk_record_command_buffer(vk_swapchain_buffers[i]);
+	}
 
 	while (run)
 	{
@@ -1101,13 +1107,11 @@ vk_prepare_pipeline()
 		framebuffer_info.height = win_height;
 		framebuffer_info.layers = 1;
 
-		vk_framebuffers = new VkFramebuffer[vk_swapchain_image_count];
-
 		for (uint32_t i = 0; i < vk_swapchain_image_count; ++i)
 		{
 			attachments[0] = vk_swapchain_buffers[i].view;
 			error = vkCreateFramebuffer(vk_device, &framebuffer_info, nullptr,
-										&vk_framebuffers[i]);
+										&vk_swapchain_buffers[i].framebuffer);
 			assert(!error);
 		}
 	}
@@ -1283,12 +1287,11 @@ vk_prepare_pipeline()
 static void
 vk_shutdown()
 {
-	for (int i = 0; i < vk_swapchain_image_count; ++i)
+	for (uint32_t i = 0; i < vk_swapchain_image_count; ++i)
 	{
-		vkDestroyFramebuffer(vk_device, vk_framebuffers[i], nullptr);
+		vkDestroyFramebuffer(vk_device, vk_swapchain_buffers[i].framebuffer, nullptr);
 	}
-	delete[] vk_framebuffers;
-
+	
 	delete[] vk_swapchain_buffers;
 	delete[] vk_queue_props;
 
@@ -1301,6 +1304,80 @@ vk_shutdown()
 
 	vkDestroySurfaceKHR(vk_instance, vk_surface, nullptr);
 	vkDestroyInstance(vk_instance, nullptr);
+}
+
+
+static void
+vk_record_command_buffer(SwapchainBuffer& buffer)
+{
+	VkResult error;
+
+	{
+		VkCommandBufferInheritanceInfo inherit_info;
+		inherit_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_INHERITANCE_INFO;
+		inherit_info.pNext = nullptr;
+		inherit_info.renderPass = VK_NULL_HANDLE;
+		inherit_info.subpass = 0;
+		inherit_info.framebuffer = VK_NULL_HANDLE;
+		inherit_info.occlusionQueryEnable = VK_FALSE;
+		inherit_info.queryFlags = 0;
+		inherit_info.pipelineStatistics = 0;
+		VkCommandBufferBeginInfo begin_info;
+		begin_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+		begin_info.pNext = nullptr;
+		begin_info.flags = 0;
+		begin_info.pInheritanceInfo = &inherit_info;
+
+		error = vkBeginCommandBuffer(buffer.cmd, &begin_info);
+		assert(!error);
+	}
+
+	{
+		VkImageMemoryBarrier image_memory_barrier;
+		image_memory_barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+		image_memory_barrier.pNext = nullptr;
+		image_memory_barrier.srcAccessMask = 0;
+		image_memory_barrier.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+		image_memory_barrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+		image_memory_barrier.newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+		image_memory_barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+		image_memory_barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+		image_memory_barrier.image = buffer.image;
+		image_memory_barrier.subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
+
+		vkCmdPipelineBarrier(buffer.cmd, 
+							 VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+							 VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 0, 
+							 0, nullptr,
+							 0, nullptr,
+							 1, &image_memory_barrier);
+	}
+
+	{
+		float clear_color[4] = { 0.2f, 0.2f, 0.2f, 0.2f };
+
+		VkClearValue clear_values[2];
+		memcpy(clear_values[0].color.float32, clear_color, sizeof(float) * 4);
+		clear_values[1].depthStencil = { 1.0f, 0 };
+
+		VkRenderPassBeginInfo begin_info;
+		begin_info.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+		begin_info.pNext = nullptr;
+		begin_info.renderPass = vk_render_pass;
+		begin_info.framebuffer = buffer.framebuffer;
+		begin_info.renderArea = { {0, 0}, {win_width, win_height} };
+		begin_info.clearValueCount = 2;
+		begin_info.pClearValues = clear_values;
+
+		vkCmdBeginRenderPass(buffer.cmd, &begin_info, 
+							 VK_SUBPASS_CONTENTS_INLINE);
+
+		// NOTE: cube.c:636
+	}
+
+	vkCmdEndRenderPass(buffer.cmd);
+	error = vkEndCommandBuffer(buffer.cmd);
+	assert(!error);
 }
 
 
