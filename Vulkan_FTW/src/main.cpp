@@ -28,6 +28,8 @@
 		assert(fp.##entrypoint != nullptr);\
 	}
 
+using Bitfield32_t = uint32_t;
+
 
 struct SwapchainBuffer
 {
@@ -126,6 +128,8 @@ static VkRenderPass				vk_render_pass;
 static VkPipelineCache			vk_pipeline_cache;
 static VkPipeline				vk_pipeline;
 
+static VkFramebuffer*			vk_framebuffers;
+
 static VkDescriptorSetLayout	vk_desc_set_layout;
 static VkDescriptorPool			vk_descriptor_pool;
 static VkDescriptorSet			vk_descriptor_set;
@@ -133,6 +137,9 @@ static VkDescriptorSet			vk_descriptor_set;
 static std::unordered_map<std::string, VkShaderModule>		vk_shaders;
 
 static VkBuffer					vk_matrix_buffer;
+static VkMemoryAllocateInfo		vk_matrix_buffer_mem_alloc;
+static VkDeviceMemory			vk_matrix_buffer_memory;
+static VkDescriptorBufferInfo	vk_matrix_buffer_desc_info;
 
 
 static VkDebugReportCallbackEXT	vk_debug_callback;
@@ -151,8 +158,11 @@ static void vk_shutdown();
 
 static void vk_set_image_layout(VkImage, VkImageAspectFlags, VkImageLayout, 
 								VkImageLayout, VkAccessFlagBits);
+
 static VkShaderModule vk_load_shader(const std::string&, const std::string&);
 
+static uint32_t	vk_get_memory_type_index(const VkPhysicalDeviceMemoryProperties&, 
+										 Bitfield32_t, VkFlags);
 
 VKAPI_ATTR VkBool32 VKAPI_CALL
 vk_debug_log(VkFlags, VkDebugReportObjectTypeEXT, uint64_t, size_t, int32_t,
@@ -793,19 +803,10 @@ vk_prepare_resources()
 		vk_depth_buffer.mem_alloc_info.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
 		vk_depth_buffer.mem_alloc_info.pNext = nullptr;
 		vk_depth_buffer.mem_alloc_info.allocationSize = image_mem_reqs.size;
-		// NOTE: memory_type_from_properties
-		vk_depth_buffer.mem_alloc_info.memoryTypeIndex = UINT32_MAX;
-		{
-			uint32_t type_bits = image_mem_reqs.memoryTypeBits;
-			for (uint32_t i = 0; i < vk_memory_properties.memoryTypeCount; ++i)
-			{
-				if ((type_bits & (1 << i)))
-				{
-					vk_depth_buffer.mem_alloc_info.memoryTypeIndex = i;
-					break;
-				}
-			}
-		}
+		vk_depth_buffer.mem_alloc_info.memoryTypeIndex =
+			vk_get_memory_type_index(vk_memory_properties,
+									 image_mem_reqs.memoryTypeBits,
+									 0);
 		assert(vk_depth_buffer.mem_alloc_info.memoryTypeIndex != UINT32_MAX);
 
 		error = vkAllocateMemory(vk_device, &vk_depth_buffer.mem_alloc_info,
@@ -881,7 +882,41 @@ vk_prepare_resources()
 		vkGetBufferMemoryRequirements(vk_device, vk_matrix_buffer, 
 									  &memory_reqs);
 
-		// NOTE: cube.c:1358
+		// NOTE: vk_matrix_buffer_mem_alloc might be unnecessary, as VK_WHOLE_SIZE
+		//		 is a valid argument to vkMapMemory size parameter.
+		vk_matrix_buffer_mem_alloc.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+		vk_matrix_buffer_mem_alloc.pNext = nullptr;
+		vk_matrix_buffer_mem_alloc.allocationSize = memory_reqs.size;
+		vk_matrix_buffer_mem_alloc.memoryTypeIndex = 
+			vk_get_memory_type_index(vk_memory_properties, 
+									 memory_reqs.memoryTypeBits,
+									 VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | 
+									 VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+		assert(vk_matrix_buffer_mem_alloc.memoryTypeIndex != UINT32_MAX);
+
+		error = vkAllocateMemory(vk_device, &vk_matrix_buffer_mem_alloc, nullptr,
+								 &vk_matrix_buffer_memory);
+		assert(!error);
+
+		uint8_t* p_data;
+		error = vkMapMemory(vk_device, vk_matrix_buffer_memory, 0,
+							VK_WHOLE_SIZE, 0,
+							(void**)&p_data);
+		assert(!error);
+
+		memset(p_data, 0, buffer_info.size);
+
+		vkUnmapMemory(vk_device, vk_matrix_buffer_memory);
+
+		error = vkBindBufferMemory(vk_device, vk_matrix_buffer,
+								   vk_matrix_buffer_memory, 0);
+		assert(!error);
+
+		// NOTE: vk_matrix_buffer_desc_info might be created in place, 
+		//		 if its range is always VK_WHOLE_SIZE
+		vk_matrix_buffer_desc_info.buffer = vk_matrix_buffer;
+		vk_matrix_buffer_desc_info.offset = 0;
+		vk_matrix_buffer_desc_info.range = VK_WHOLE_SIZE;
 	}
 }
 
@@ -917,6 +952,8 @@ vk_prepare_pipeline()
 											nullptr, &vk_desc_set_layout);
 		assert(!error);
 
+		// NOTE: vk_pipeline_layout is not used before the pipeline creation,
+		//		 so it could be created later.
 		VkPipelineLayoutCreateInfo pipeline_layout_info;
 		pipeline_layout_info.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
 		pipeline_layout_info.pNext = nullptr;
@@ -964,6 +1001,26 @@ vk_prepare_pipeline()
 		error = vkAllocateDescriptorSets(vk_device, &alloc_info, 
 										 &vk_descriptor_set);
 		assert(!error);
+
+		// NOTE: See cube:demo_prepare_descriptor_set:1737 for texture handling.
+		VkDescriptorBufferInfo buffer_desc_info;
+		buffer_desc_info.buffer = vk_matrix_buffer;
+		buffer_desc_info.offset = 0;
+		buffer_desc_info.range = VK_WHOLE_SIZE;
+		VkWriteDescriptorSet desc_set_writes[1];
+		desc_set_writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+		desc_set_writes[0].pNext = nullptr;
+		desc_set_writes[0].dstSet = vk_descriptor_set;
+		desc_set_writes[0].dstBinding = 0;
+		desc_set_writes[0].dstArrayElement = 0;
+		desc_set_writes[0].descriptorCount = 1;
+		// NOTE: Remember to look into VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC
+		desc_set_writes[0].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+		desc_set_writes[0].pImageInfo = nullptr;
+		desc_set_writes[0].pBufferInfo = &buffer_desc_info;
+		desc_set_writes[0].pTexelBufferView = nullptr;
+
+		vkUpdateDescriptorSets(vk_device, 1, desc_set_writes, 0, nullptr);
 	}
 
 
@@ -1027,10 +1084,36 @@ vk_prepare_pipeline()
 								   &vk_render_pass);
 		assert(!error);
 	}
+
+	// CREATE FRAMEBUFFERS
+	{
+		VkImageView attachments[2];
+		attachments[1] = vk_depth_buffer.view;
+
+		VkFramebufferCreateInfo framebuffer_info;
+		framebuffer_info.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
+		framebuffer_info.pNext = nullptr;
+		framebuffer_info.flags = 0;
+		framebuffer_info.renderPass = vk_render_pass;
+		framebuffer_info.attachmentCount = 2;
+		framebuffer_info.pAttachments = attachments;
+		framebuffer_info.width = win_width;
+		framebuffer_info.height = win_height;
+		framebuffer_info.layers = 1;
+
+		vk_framebuffers = new VkFramebuffer[vk_swapchain_image_count];
+
+		for (uint32_t i = 0; i < vk_swapchain_image_count; ++i)
+		{
+			attachments[0] = vk_swapchain_buffers[i].view;
+			error = vkCreateFramebuffer(vk_device, &framebuffer_info, nullptr,
+										&vk_framebuffers[i]);
+			assert(!error);
+		}
+	}
 	
 	// PIPELINE
 	{
-
 		VkPipelineVertexInputStateCreateInfo	vi_info;
 		VkPipelineInputAssemblyStateCreateInfo	ia_info;
 		VkPipelineViewportStateCreateInfo		vp_info;
@@ -1190,6 +1273,9 @@ vk_prepare_pipeline()
 										  &pipeline_info, nullptr,
 										  &vk_pipeline);
 		assert(!error);
+
+		// NOTE: Once the graphics pipeline has been created, the shader modules
+		//		 should be destroyable.
 	}
 }
 
@@ -1197,6 +1283,12 @@ vk_prepare_pipeline()
 static void
 vk_shutdown()
 {
+	for (int i = 0; i < vk_swapchain_image_count; ++i)
+	{
+		vkDestroyFramebuffer(vk_device, vk_framebuffers[i], nullptr);
+	}
+	delete[] vk_framebuffers;
+
 	delete[] vk_swapchain_buffers;
 	delete[] vk_queue_props;
 
@@ -1324,6 +1416,26 @@ vk_load_shader(const std::string& _name, const std::string& _path)
 
 	vk_shaders.emplace(_name, shader_module);
 	return shader_module;
+}
+
+
+static uint32_t
+vk_get_memory_type_index(const VkPhysicalDeviceMemoryProperties& memory_properties,
+						 Bitfield32_t type_bits, VkFlags type_requirements)
+{
+	uint32_t result = UINT32_MAX;
+	for (uint32_t i = 0; i < memory_properties.memoryTypeCount; ++i)
+	{
+		VkFlags matching_flags =
+			memory_properties.memoryTypes[i].propertyFlags & type_requirements;
+		
+		if ((type_bits & (1 << i)) && matching_flags == type_requirements)
+		{
+			result = i;
+			break;
+		}
+	}
+	return result;
 }
 
 
