@@ -156,6 +156,7 @@ static void vk_prepare_pipeline();
 static void vk_shutdown();
 
 static void vk_record_command_buffer(SwapchainBuffer&);
+static void vk_flush_global_command_buffer();
 
 static void vk_set_image_layout(VkImage, VkImageAspectFlags, VkImageLayout, 
 								VkImageLayout, VkAccessFlagBits);
@@ -218,6 +219,7 @@ WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 		break;
 	case WM_PAINT:
 		// DRAW HERE
+		// NOTE: cube.c:2007
 		break;
 	case WM_SIZE:
 		// RESIZE HERE
@@ -251,9 +253,10 @@ WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int)
 	vk_prepare_pipeline();
 
 	for (uint32_t i = 0; i < vk_swapchain_image_count; ++i)
-	{
 		vk_record_command_buffer(vk_swapchain_buffers[i]);
-	}
+
+	vk_flush_global_command_buffer();
+
 
 	while (run)
 	{
@@ -1372,12 +1375,96 @@ vk_record_command_buffer(SwapchainBuffer& buffer)
 		vkCmdBeginRenderPass(buffer.cmd, &begin_info, 
 							 VK_SUBPASS_CONTENTS_INLINE);
 
-		// NOTE: cube.c:636
+		vkCmdBindPipeline(buffer.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, 
+						  vk_pipeline);
+		vkCmdBindDescriptorSets(buffer.cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+								vk_pipeline_layout, 0, 1, &vk_descriptor_set,
+								0, nullptr);
 	}
 
+	{
+		VkViewport viewport;
+		viewport.x = 0.f;
+		viewport.y = 0.f;
+		viewport.width = (float)win_width;
+		viewport.height = (float)win_height;
+		viewport.minDepth = 0.f;
+		viewport.maxDepth = 1.f;
+
+		vkCmdSetViewport(buffer.cmd, 0, 1, &viewport);
+	}
+
+	{
+		VkRect2D scissor;
+		scissor.offset.x = 0;
+		scissor.offset.y = 0;
+		scissor.extent.width = win_width;
+		scissor.extent.height = win_height;
+
+		vkCmdSetScissor(buffer.cmd, 0, 1, &scissor);
+	}
+
+	// NOTE: Draw is recorded here. But it seems edgy, because we usually don't know beforehand how many vertex we will be drawing.
+	vkCmdDraw(buffer.cmd, 12 * 3, 1, 0, 0);
 	vkCmdEndRenderPass(buffer.cmd);
+	
+	{
+		VkImageMemoryBarrier pre_present_barrier;
+		pre_present_barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+		pre_present_barrier.pNext = nullptr;
+		pre_present_barrier.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+		pre_present_barrier.dstAccessMask = VK_ACCESS_MEMORY_READ_BIT;
+		pre_present_barrier.oldLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+		pre_present_barrier.newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+		pre_present_barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+		pre_present_barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+		pre_present_barrier.image = buffer.image;
+		pre_present_barrier.subresourceRange = {
+			VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1
+		};
+	
+		vkCmdPipelineBarrier(buffer.cmd, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+							 VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 0,
+							 0, nullptr,
+							 0, nullptr,
+							 1, &pre_present_barrier);
+	}
+
 	error = vkEndCommandBuffer(buffer.cmd);
 	assert(!error);
+}
+
+
+static void
+vk_flush_global_command_buffer()
+{
+	VkResult error;
+
+	if (vk_cmd_buffer == VK_NULL_HANDLE)
+		return;
+
+	error = vkEndCommandBuffer(vk_cmd_buffer);
+	assert(!error);
+
+	VkSubmitInfo submit_info;
+	submit_info.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+	submit_info.pNext = nullptr;
+	submit_info.waitSemaphoreCount = 0;
+	submit_info.pWaitSemaphores = nullptr;
+	submit_info.pWaitDstStageMask = nullptr;
+	submit_info.commandBufferCount = 1;
+	submit_info.pCommandBuffers = &vk_cmd_buffer;
+	submit_info.signalSemaphoreCount = 0;
+	submit_info.pSignalSemaphores = nullptr;
+
+	error = vkQueueSubmit(vk_main_queue, 1, &submit_info, VK_NULL_HANDLE);
+	assert(!error);
+
+	error = vkQueueWaitIdle(vk_main_queue);
+	assert(!error);
+
+	vkFreeCommandBuffers(vk_device, vk_cmd_pool, 1, &vk_cmd_buffer);
+	vk_cmd_buffer = VK_NULL_HANDLE;
 }
 
 
