@@ -1130,13 +1130,22 @@ vk_prepare_pipeline()
 		VkPipelineColorBlendStateCreateInfo		cb_info;
 		VkPipelineDynamicStateCreateInfo		dy_info;
 
+		VkVertexInputBindingDescription input_binding;
+		input_binding.binding = 0;
+		input_binding.stride = 3 * sizeof(float);
+		input_binding.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
+		VkVertexInputAttributeDescription input_attribute;
+		input_attribute.location = 0;
+		input_attribute.binding = input_binding.binding;
+		input_attribute.format = VK_FORMAT_R32G32B32_SFLOAT;
+		input_attribute.offset = 0;
 		vi_info.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
 		vi_info.pNext = nullptr;
 		vi_info.flags = 0;
-		vi_info.vertexBindingDescriptionCount = 0;
-		vi_info.pVertexBindingDescriptions = nullptr;
-		vi_info.vertexAttributeDescriptionCount = 0;
-		vi_info.pVertexAttributeDescriptions = nullptr;
+		vi_info.vertexBindingDescriptionCount = 1;
+		vi_info.pVertexBindingDescriptions = &input_binding;
+		vi_info.vertexAttributeDescriptionCount = 1;
+		vi_info.pVertexAttributeDescriptions = &input_attribute;
 
 		ia_info.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
 		ia_info.pNext = nullptr;
@@ -1405,6 +1414,11 @@ vk_record_command_buffer(SwapchainBuffer& buffer)
 	}
 
 	// NOTE: Draw is recorded here. But it seems edgy, because we usually don't know beforehand how many vertex we will be drawing.
+	// NOTE: Indexed drawing uses
+	/*
+		vkCmdBindIndexBuffer
+		vkCmdDrawIndexed
+	*/
 	vkCmdDraw(buffer.cmd, 12 * 3, 1, 0, 0);
 	vkCmdEndRenderPass(buffer.cmd);
 	
