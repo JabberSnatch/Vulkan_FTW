@@ -148,8 +148,10 @@ struct YsBuffer
 {
 	VkBuffer		buffer;
 	VkDeviceMemory	memory;
+	VkDeviceSize	size = 0;
 };
 
+static YsBuffer		ys_cube_vertex_buffer;
 static YsBuffer		ys_cube_index_buffer;
 
 static float		ys_cube_vertex[] = 
@@ -183,6 +185,9 @@ int main(int, char**);
 int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int);
 
 static void ys_prepare_cube();
+
+static void ys_buffer_allocate(YsBuffer&, VkDeviceSize, VkBufferUsageFlags);
+static void ys_buffer_set(YsBuffer&, void*, VkDeviceSize);
 
 static void vk_init();
 static void vk_setup_debug_report_callback();
@@ -318,56 +323,85 @@ static void
 ys_prepare_cube()
 {
 	VkResult error;
-	// NEXT: use cube_indices, and vertices
 
-	// INDEX BUFFER CREATE
+	// INDEX BUFFER SETUP
 	{
-		VkBufferCreateInfo create_info;
-		create_info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-		create_info.pNext = nullptr;
-		create_info.flags = 0;
-		create_info.size = 36 * sizeof(float);
-		create_info.usage = VK_BUFFER_USAGE_INDEX_BUFFER_BIT;
-		create_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-		create_info.queueFamilyIndexCount = 0;
-		create_info.pQueueFamilyIndices = nullptr;
+		YsBuffer&			ys_buffer_handl = ys_cube_index_buffer;
+		VkDeviceSize		buffer_size = 36 * sizeof(uint32_t);
+		VkBufferUsageFlags	buffer_usage = VK_BUFFER_USAGE_INDEX_BUFFER_BIT;
+		void*				p_host_memory = ys_cube_indices;
 
-		error = vkCreateBuffer(vk_device, &create_info, nullptr, &ys_cube_index_buffer.buffer);
-		assert(!error);
-
-		VkMemoryRequirements mem_reqs;
-		vkGetBufferMemoryRequirements(vk_device, ys_cube_index_buffer.buffer, &mem_reqs);
-
-		VkMemoryAllocateInfo mem_alloc;
-		mem_alloc.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-		mem_alloc.pNext = nullptr;
-		mem_alloc.allocationSize = mem_reqs.size;
-		mem_alloc.memoryTypeIndex = 
-			vk_get_memory_type_index(vk_memory_properties, 
-									 mem_reqs.memoryTypeBits,
-									 VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | 
-									 VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
-		assert(mem_alloc.memoryTypeIndex != UINT32_MAX);
-
-		error = vkAllocateMemory(vk_device, &mem_alloc, nullptr, 
-								 &ys_cube_index_buffer.memory);
-		assert(!error);
+		ys_buffer_allocate(ys_buffer_handl, buffer_size, buffer_usage);
+		ys_buffer_set(ys_buffer_handl, p_host_memory, buffer_size);
 	}
 
-	// INDEX BUFFER INIT
+	// VERTEX BUFFER SETUP
 	{
-		uint8_t* p_data;
-		error = vkMapMemory(vk_device, ys_cube_index_buffer.memory,
-							0, VK_WHOLE_SIZE, 0, (void**)&p_data);
-		assert(!error);
+		YsBuffer&			ys_buffer_handl = ys_cube_vertex_buffer;;
+		VkDeviceSize		buffer_size = 8 * sizeof(float);
+		VkBufferUsageFlags	buffer_usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
+		void*				p_host_memory = ys_cube_vertex;
 
-		memcpy(p_data, ys_cube_indices, 36 * sizeof(float));
-		vkUnmapMemory(vk_device, ys_cube_index_buffer.memory);
-		
-		error = vkBindBufferMemory(vk_device, ys_cube_index_buffer.buffer,
-								   ys_cube_index_buffer.memory, 0);
-		assert(!error);
+		ys_buffer_allocate(ys_buffer_handl, buffer_size, buffer_usage);
+		ys_buffer_set(ys_buffer_handl, p_host_memory, buffer_size);
 	}
+}
+
+
+void	
+ys_buffer_allocate(YsBuffer& buffer_handl, VkDeviceSize buffer_size, VkBufferUsageFlags buffer_usage)
+{
+	VkResult error;
+
+	VkBufferCreateInfo create_info;
+	create_info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+	create_info.pNext = nullptr;
+	create_info.flags = 0;
+	create_info.size = buffer_size;
+	create_info.usage = buffer_usage;
+	create_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+	create_info.queueFamilyIndexCount = 0;
+	create_info.pQueueFamilyIndices = nullptr;
+
+	error = vkCreateBuffer(vk_device, &create_info, nullptr, &buffer_handl.buffer);
+	assert(!error);
+
+	VkMemoryRequirements mem_reqs;
+	vkGetBufferMemoryRequirements(vk_device, buffer_handl.buffer, &mem_reqs);
+
+	VkMemoryAllocateInfo mem_alloc;
+	mem_alloc.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+	mem_alloc.pNext = nullptr;
+	mem_alloc.allocationSize = mem_reqs.size;
+	mem_alloc.memoryTypeIndex =
+		vk_get_memory_type_index(vk_memory_properties,
+								 mem_reqs.memoryTypeBits,
+								 VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+								 VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+	assert(mem_alloc.memoryTypeIndex != UINT32_MAX);
+
+	error = vkAllocateMemory(vk_device, &mem_alloc, nullptr,
+							 &buffer_handl.memory);
+	assert(!error);
+}
+
+
+void
+ys_buffer_set(YsBuffer& buffer_handl, void* p_host_memory, VkDeviceSize size)
+{
+	VkResult error;
+
+	uint8_t*	p_dev_memory;
+	error = vkMapMemory(vk_device, buffer_handl.memory,
+						0, VK_WHOLE_SIZE, 0, (void**)&p_dev_memory);
+	assert(!error);
+
+	memcpy(p_dev_memory, p_host_memory, size);
+	vkUnmapMemory(vk_device, buffer_handl.memory);
+
+	error = vkBindBufferMemory(vk_device, buffer_handl.buffer,
+							   buffer_handl.memory, 0);
+	assert(!error);
 }
 
 
@@ -1416,6 +1450,7 @@ vk_shutdown()
 static void
 vk_record_command_buffer(SwapchainBuffer& buffer)
 {
+	// NEXT: use vertex and index buffer to draw a cube, then actually use the cmd buffer
 	VkResult error;
 
 	{
