@@ -144,10 +144,45 @@ static VkDescriptorBufferInfo	vk_matrix_buffer_desc_info;
 static VkDebugReportCallbackEXT	vk_debug_callback;
 
 
+struct YsBuffer
+{
+	VkBuffer		buffer;
+	VkDeviceMemory	memory;
+};
+
+static YsBuffer		ys_cube_index_buffer;
+
+static float		ys_cube_vertex[] = 
+{
+	-.5f, -.5f, -.5f,
+	-.5f, -.5f, .5f,
+	-.5f, .5f, -.5f,
+	-.5f, .5f, .5f,
+	
+	.5f, -.5f, -.5f,
+	.5f, -.5f, .5f,
+	.5f, .5f, -.5f,
+	.5f, .5f, .5f
+};
+
+// NOTE: Is that a cube ?!
+static uint32_t		ys_cube_indices[] =
+{
+	0, 1, 2,	2, 1, 3,
+	7, 6, 5,	5, 6, 4,
+	1, 5, 2,	2, 5, 7,
+	4, 0, 6,	6, 0, 1,
+	0, 4, 1,	1, 4, 5,
+	3, 7, 2,	2, 7, 6
+};
+
+
 static void create_window();
 LRESULT CALLBACK WndProc(HWND, UINT, WPARAM, LPARAM);
 int main(int, char**);
 int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int);
+
+static void ys_prepare_cube();
 
 static void vk_init();
 static void vk_setup_debug_report_callback();
@@ -252,11 +287,12 @@ WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int)
 	vk_prepare_resources();
 	vk_prepare_pipeline();
 
+	ys_prepare_cube();
+
 	for (uint32_t i = 0; i < vk_swapchain_image_count; ++i)
 		vk_record_command_buffer(vk_swapchain_buffers[i]);
 
 	vk_flush_global_command_buffer();
-
 
 	while (run)
 	{
@@ -275,6 +311,63 @@ WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int)
 	vk_shutdown();
 
 	return (int)msg.wParam;
+}
+
+
+static void
+ys_prepare_cube()
+{
+	VkResult error;
+	// NEXT: use cube_indices, and vertices
+
+	// INDEX BUFFER CREATE
+	{
+		VkBufferCreateInfo create_info;
+		create_info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+		create_info.pNext = nullptr;
+		create_info.flags = 0;
+		create_info.size = 36 * sizeof(float);
+		create_info.usage = VK_BUFFER_USAGE_INDEX_BUFFER_BIT;
+		create_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+		create_info.queueFamilyIndexCount = 0;
+		create_info.pQueueFamilyIndices = nullptr;
+
+		error = vkCreateBuffer(vk_device, &create_info, nullptr, &ys_cube_index_buffer.buffer);
+		assert(!error);
+
+		VkMemoryRequirements mem_reqs;
+		vkGetBufferMemoryRequirements(vk_device, ys_cube_index_buffer.buffer, &mem_reqs);
+
+		VkMemoryAllocateInfo mem_alloc;
+		mem_alloc.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+		mem_alloc.pNext = nullptr;
+		mem_alloc.allocationSize = mem_reqs.size;
+		mem_alloc.memoryTypeIndex = 
+			vk_get_memory_type_index(vk_memory_properties, 
+									 mem_reqs.memoryTypeBits,
+									 VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | 
+									 VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+		assert(mem_alloc.memoryTypeIndex != UINT32_MAX);
+
+		error = vkAllocateMemory(vk_device, &mem_alloc, nullptr, 
+								 &ys_cube_index_buffer.memory);
+		assert(!error);
+	}
+
+	// INDEX BUFFER INIT
+	{
+		uint8_t* p_data;
+		error = vkMapMemory(vk_device, ys_cube_index_buffer.memory,
+							0, VK_WHOLE_SIZE, 0, (void**)&p_data);
+		assert(!error);
+
+		memcpy(p_data, ys_cube_indices, 36 * sizeof(float));
+		vkUnmapMemory(vk_device, ys_cube_index_buffer.memory);
+		
+		error = vkBindBufferMemory(vk_device, ys_cube_index_buffer.buffer,
+								   ys_cube_index_buffer.memory, 0);
+		assert(!error);
+	}
 }
 
 
@@ -872,6 +965,7 @@ vk_prepare_resources()
 	}
 
 	// CREATE UNIFORM BUFFER
+	// REFACT: ys_prepare_cube::INDEX BUFFER
 	{
 		VkBufferCreateInfo buffer_info;
 		buffer_info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
@@ -1419,6 +1513,7 @@ vk_record_command_buffer(SwapchainBuffer& buffer)
 		vkCmdBindIndexBuffer
 		vkCmdDrawIndexed
 	*/
+
 	vkCmdDraw(buffer.cmd, 12 * 3, 1, 0, 0);
 	vkCmdEndRenderPass(buffer.cmd);
 	
