@@ -135,11 +135,6 @@ static VkDescriptorSet			vk_descriptor_set;
 
 static std::unordered_map<std::string, VkShaderModule>		vk_shaders;
 
-static VkBuffer					vk_matrix_buffer;
-static VkMemoryAllocateInfo		vk_matrix_buffer_mem_alloc;
-static VkDeviceMemory			vk_matrix_buffer_memory;
-static VkDescriptorBufferInfo	vk_matrix_buffer_desc_info;
-
 
 static VkDebugReportCallbackEXT	vk_debug_callback;
 
@@ -149,10 +144,13 @@ struct YsBuffer
 	VkBuffer		buffer;
 	VkDeviceMemory	memory;
 	VkDeviceSize	size = 0;
+	uint64_t		value_count = 0;
 };
 
 static YsBuffer		ys_cube_vertex_buffer;
 static YsBuffer		ys_cube_index_buffer;
+
+static YsBuffer		ys_matrix_buffer;
 
 static float		ys_cube_vertex[] = 
 {
@@ -178,6 +176,22 @@ static uint32_t		ys_cube_indices[] =
 	3, 7, 2,	2, 7, 6
 };
 
+static float		ys_matrix_identity[] =
+{
+	1.f, 0.f, 0.f, 0.f,
+	0.f, 1.f, 0.f, 0.f,
+	0.f, 0.f, 1.f, 0.f,
+	0.f, 0.f, 0.f, 1.f
+};
+
+static float		ys_cube_world[] =
+{
+	1.f, 0.f, 0.f, 0.f,
+	0.f, 1.f, 0.f, 0.f,
+	0.f, 0.f, 1.f, 0.f,
+	0.f, 0.f, -5.f, 1.f
+};
+
 
 static void create_window();
 LRESULT CALLBACK WndProc(HWND, UINT, WPARAM, LPARAM);
@@ -187,7 +201,10 @@ int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int);
 static void ys_prepare_cube();
 
 static void ys_buffer_allocate(YsBuffer&, VkDeviceSize, VkBufferUsageFlags);
-static void ys_buffer_set(YsBuffer&, void*, VkDeviceSize);
+static void ys_buffer_set(YsBuffer&, void*, VkDeviceSize, VkDeviceSize = 0);
+
+static void vk_run();
+static void vk_draw();
 
 static void vk_init();
 static void vk_setup_debug_report_callback();
@@ -259,6 +276,7 @@ WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 		break;
 	case WM_PAINT:
 		// DRAW HERE
+		// NEXT
 		// NOTE: cube.c:2007
 		break;
 	case WM_SIZE:
@@ -280,7 +298,7 @@ main(int, char**)
 int WINAPI 
 WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int)
 {
-	// TODO: Add an argument parser in order to
+	// LATER: Add an argument parser in order to
 	//		 - enable/disable validation layers
 	MSG		msg;
 	bool	run = true;
@@ -327,28 +345,32 @@ ys_prepare_cube()
 	// INDEX BUFFER SETUP
 	{
 		YsBuffer&			ys_buffer_handl = ys_cube_index_buffer;
-		VkDeviceSize		buffer_size = 36 * sizeof(uint32_t);
+		uint64_t			value_count = 36;
+		VkDeviceSize		buffer_size = value_count * sizeof(uint32_t);
 		VkBufferUsageFlags	buffer_usage = VK_BUFFER_USAGE_INDEX_BUFFER_BIT;
 		void*				p_host_memory = ys_cube_indices;
 
 		ys_buffer_allocate(ys_buffer_handl, buffer_size, buffer_usage);
 		ys_buffer_set(ys_buffer_handl, p_host_memory, buffer_size);
+		ys_buffer_handl.value_count = value_count;
 	}
 
 	// VERTEX BUFFER SETUP
 	{
-		YsBuffer&			ys_buffer_handl = ys_cube_vertex_buffer;;
-		VkDeviceSize		buffer_size = 8 * sizeof(float);
+		YsBuffer&			ys_buffer_handl = ys_cube_vertex_buffer;
+		uint64_t			value_count = 8;
+		VkDeviceSize		buffer_size = value_count * sizeof(float);
 		VkBufferUsageFlags	buffer_usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
 		void*				p_host_memory = ys_cube_vertex;
 
 		ys_buffer_allocate(ys_buffer_handl, buffer_size, buffer_usage);
 		ys_buffer_set(ys_buffer_handl, p_host_memory, buffer_size);
+		ys_buffer_handl.value_count = value_count;
 	}
 }
 
 
-void	
+static void	
 ys_buffer_allocate(YsBuffer& buffer_handl, VkDeviceSize buffer_size, VkBufferUsageFlags buffer_usage)
 {
 	VkResult error;
@@ -383,27 +405,70 @@ ys_buffer_allocate(YsBuffer& buffer_handl, VkDeviceSize buffer_size, VkBufferUsa
 	error = vkAllocateMemory(vk_device, &mem_alloc, nullptr,
 							 &buffer_handl.memory);
 	assert(!error);
-}
 
+	buffer_handl.size = buffer_size;
 
-void
-ys_buffer_set(YsBuffer& buffer_handl, void* p_host_memory, VkDeviceSize size)
-{
-	VkResult error;
-
-	uint8_t*	p_dev_memory;
-	error = vkMapMemory(vk_device, buffer_handl.memory,
-						0, VK_WHOLE_SIZE, 0, (void**)&p_dev_memory);
-	assert(!error);
-
-	memcpy(p_dev_memory, p_host_memory, size);
-	vkUnmapMemory(vk_device, buffer_handl.memory);
-
+	// NOTE: A buffer can be bound to memory at any time.
 	error = vkBindBufferMemory(vk_device, buffer_handl.buffer,
 							   buffer_handl.memory, 0);
 	assert(!error);
 }
 
+
+static void
+ys_buffer_set(YsBuffer& buffer_handl, void* p_host_memory, VkDeviceSize size, VkDeviceSize offset)
+{
+	VkResult error;
+
+	uint8_t*	p_dev_memory_base;
+	uint8_t*	p_dev_memory;
+	error = vkMapMemory(vk_device, buffer_handl.memory,
+						0, VK_WHOLE_SIZE, 0, (void**)&p_dev_memory_base);
+	assert(!error);
+
+	p_dev_memory = p_dev_memory_base + offset;
+
+	memcpy(p_dev_memory, p_host_memory, size);
+	vkUnmapMemory(vk_device, buffer_handl.memory);
+}
+
+
+static void
+vk_run()
+{
+	vkDeviceWaitIdle(vk_device);
+
+	vk_draw();
+
+	vkDeviceWaitIdle(vk_device);
+}
+
+
+static void
+vk_draw()
+{
+	VkResult error;
+	
+	VkSemaphore present_complete_semaphore;
+	{
+		VkSemaphoreCreateInfo create_info;
+		create_info.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
+		create_info.pNext = nullptr;
+		create_info.flags = 0;
+	
+		error = vkCreateSemaphore(vk_device, &create_info, nullptr,
+								  &present_complete_semaphore);
+		assert(!error);
+	}
+
+/*
+	error = fp.AcquireNextImageKHR(vk_device, vk_swapchain, UINT64_MAX, 
+								   present_complete_semaphore,
+								   VK_NULL_HANDLE,
+								   )
+*/
+	// NEXT: Give a current buffer to vk_draw, and update it over time. cube.c:720
+}
 
 static void
 vk_init()
@@ -999,61 +1064,40 @@ vk_prepare_resources()
 	}
 
 	// CREATE UNIFORM BUFFER
-	// REFACT: ys_prepare_cube::INDEX BUFFER
 	{
-		VkBufferCreateInfo buffer_info;
-		buffer_info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-		buffer_info.pNext = nullptr;
-		buffer_info.flags = 0;
-		buffer_info.size = 16 * 3 * sizeof(float);
-		buffer_info.usage = VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
-		buffer_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-		buffer_info.queueFamilyIndexCount = 0;
-		buffer_info.pQueueFamilyIndices = nullptr;
+		YsBuffer&			ys_buffer_handl = ys_matrix_buffer;
+		uint64_t			value_count = 16 * 3;
+		VkDeviceSize		buffer_size = value_count * sizeof(float);
+		VkBufferUsageFlags	buffer_usage = VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
 
-		error = vkCreateBuffer(vk_device, &buffer_info, nullptr,
-							   &vk_matrix_buffer);
-		assert(!error);
+		ys_buffer_allocate(ys_buffer_handl, buffer_size, buffer_usage);
+		ys_buffer_handl.value_count = value_count;
+	}
 
-		VkMemoryRequirements memory_reqs;
-		vkGetBufferMemoryRequirements(vk_device, vk_matrix_buffer, 
-									  &memory_reqs);
-
-		// NOTE: vk_matrix_buffer_mem_alloc might be unnecessary, as VK_WHOLE_SIZE
-		//		 is a valid argument to vkMapMemory size parameter.
-		vk_matrix_buffer_mem_alloc.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-		vk_matrix_buffer_mem_alloc.pNext = nullptr;
-		vk_matrix_buffer_mem_alloc.allocationSize = memory_reqs.size;
-		vk_matrix_buffer_mem_alloc.memoryTypeIndex = 
-			vk_get_memory_type_index(vk_memory_properties, 
-									 memory_reqs.memoryTypeBits,
-									 VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | 
-									 VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
-		assert(vk_matrix_buffer_mem_alloc.memoryTypeIndex != UINT32_MAX);
-
-		error = vkAllocateMemory(vk_device, &vk_matrix_buffer_mem_alloc, nullptr,
-								 &vk_matrix_buffer_memory);
-		assert(!error);
-
+	// SET BUFFER TO ZERO
+	{
 		uint8_t* p_data;
-		error = vkMapMemory(vk_device, vk_matrix_buffer_memory, 0,
+		error = vkMapMemory(vk_device, ys_matrix_buffer.memory, 0,
 							VK_WHOLE_SIZE, 0,
 							(void**)&p_data);
 		assert(!error);
 
-		memset(p_data, 0, buffer_info.size);
+		memset(p_data, 0, ys_matrix_buffer.size);
 
-		vkUnmapMemory(vk_device, vk_matrix_buffer_memory);
+		vkUnmapMemory(vk_device, ys_matrix_buffer.memory);
+	}
 
-		error = vkBindBufferMemory(vk_device, vk_matrix_buffer,
-								   vk_matrix_buffer_memory, 0);
-		assert(!error);
+	// NOTE: This part will eventually move out in a transform utility function
+	{
+		YsBuffer&		ys_buffer_handl = ys_matrix_buffer;
+		VkDeviceSize	matrix_size = 16 * sizeof(float);
 
-		// NOTE: vk_matrix_buffer_desc_info might be created in place, 
-		//		 if its range is always VK_WHOLE_SIZE
-		vk_matrix_buffer_desc_info.buffer = vk_matrix_buffer;
-		vk_matrix_buffer_desc_info.offset = 0;
-		vk_matrix_buffer_desc_info.range = VK_WHOLE_SIZE;
+		void*			p_host_memory = ys_cube_world;
+		ys_buffer_set(ys_buffer_handl, p_host_memory, matrix_size, 0);
+		
+		p_host_memory = ys_matrix_identity;
+		ys_buffer_set(ys_buffer_handl, p_host_memory, matrix_size, matrix_size);
+		ys_buffer_set(ys_buffer_handl, p_host_memory, matrix_size, matrix_size * 2);
 	}
 }
 
@@ -1072,6 +1116,7 @@ vk_prepare_pipeline()
 		layout_bindings[0].stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
 		layout_bindings[0].pImmutableSamplers = nullptr;
 
+		// NOTE: This one is unused
 		layout_bindings[1].binding = 1;
 		layout_bindings[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
 		layout_bindings[1].descriptorCount = 1;
@@ -1110,6 +1155,8 @@ vk_prepare_pipeline()
 		VkDescriptorPoolSize desc_counts[2];
 		desc_counts[0].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
 		desc_counts[0].descriptorCount = 1;
+
+		// NOTE: No image sampling for now.
 		desc_counts[1].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
 		desc_counts[1].descriptorCount = 1;
 
@@ -1141,7 +1188,7 @@ vk_prepare_pipeline()
 
 		// NOTE: See cube:demo_prepare_descriptor_set:1737 for texture handling.
 		VkDescriptorBufferInfo buffer_desc_info;
-		buffer_desc_info.buffer = vk_matrix_buffer;
+		buffer_desc_info.buffer = ys_matrix_buffer.buffer;
 		buffer_desc_info.offset = 0;
 		buffer_desc_info.range = VK_WHOLE_SIZE;
 		VkWriteDescriptorSet desc_set_writes[1];
@@ -1542,14 +1589,18 @@ vk_record_command_buffer(SwapchainBuffer& buffer)
 		vkCmdSetScissor(buffer.cmd, 0, 1, &scissor);
 	}
 
-	// NOTE: Draw is recorded here. But it seems edgy, because we usually don't know beforehand how many vertex we will be drawing.
-	// NOTE: Indexed drawing uses
-	/*
-		vkCmdBindIndexBuffer
-		vkCmdDrawIndexed
-	*/
+	// BIND VERTEX BUFFER
+	{
+		VkDeviceSize offset = 0;
+		vkCmdBindVertexBuffers(buffer.cmd, 0, 1, &ys_cube_vertex_buffer.buffer, &offset);
+	}
 
-	vkCmdDraw(buffer.cmd, 12 * 3, 1, 0, 0);
+	// BIND INDEX BUFFER
+	{
+		vkCmdBindIndexBuffer(buffer.cmd, ys_cube_index_buffer.buffer, 0, VK_INDEX_TYPE_UINT32);
+	}
+
+	vkCmdDrawIndexed(buffer.cmd, ys_cube_index_buffer.value_count, 1, 0, 0, 0);
 	vkCmdEndRenderPass(buffer.cmd);
 	
 	{

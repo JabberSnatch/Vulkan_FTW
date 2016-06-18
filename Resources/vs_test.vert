@@ -19,7 +19,7 @@ out gl_PerVertex
 
 void main(void)
 {
-	gl_Position = vec4(1, 1, 1, 1);
+	gl_Position = matrices.projection * matrices.view * matrices.world * vec4(position, 1);
 	
 	// GL->VK conventions
 	gl_Position.y = -gl_Position.y;
