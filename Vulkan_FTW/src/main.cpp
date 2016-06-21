@@ -160,7 +160,7 @@ static float		ys_cube_vertex[] =
 	0.f, 0.f, 1.f,
 	0.f, 1.f, 0.f,
 	0.f, 1.f, 1.f,
-
+	
 	1.f, 0.f, 0.f,
 	1.f, 0.f, 1.f,
 	1.f, 1.f, 0.f,
@@ -195,7 +195,7 @@ static uint32_t		ys_cube_indices[] =
 	//3, 7, 2,	2, 7, 6
 };
 
-static float		ys_matrix_identity[] =
+static float		ys_matrix_view[] =
 {
 	1.f, 0.f, 0.f, 0.f,
 	0.f, 1.f, 0.f, 0.f,
@@ -216,7 +216,7 @@ static float		ys_cube_world[] =
 	1.f, 0.f, 0.f, 0.f,
 	0.f, 1.f, 0.f, 0.f,
 	0.f, 0.f, 1.f, 0.f,
-	0.f, 0.f, -5.f, 1.f
+	0.f, 0.f, -3.f, 1.f
 };
 
 
@@ -1182,7 +1182,7 @@ vk_prepare_resources()
 		void*			p_host_memory = ys_cube_world;
 		ys_buffer_set(ys_buffer_handl, p_host_memory, matrix_size, 0);
 		
-		p_host_memory = ys_matrix_identity;
+		p_host_memory = ys_matrix_view;
 		ys_buffer_set(ys_buffer_handl, p_host_memory, matrix_size, matrix_size);
 
 		ys_compute_perspective(ys_matrix_projection, 0.1f, 1000.f, 90.f, 800.f/600.f);
