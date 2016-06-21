@@ -301,9 +301,6 @@ main(int, char**)
 int WINAPI 
 WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int)
 {
-	int i;
-	std::cin >> i;
-
 	// LATER: Add an argument parser in order to
 	//		 - enable/disable validation layers
 	MSG		msg;
