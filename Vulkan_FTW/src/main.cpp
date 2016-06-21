@@ -146,7 +146,7 @@ struct YsBuffer
 	VkBuffer		buffer;
 	VkDeviceMemory	memory;
 	VkDeviceSize	size = 0;
-	uint64_t		value_count = 0;
+	uint32_t		value_count = 0;
 };
 
 static YsBuffer		ys_cube_vertex_buffer;
@@ -156,29 +156,54 @@ static YsBuffer		ys_matrix_buffer;
 
 static float		ys_cube_vertex[] = 
 {
-	-.5f, -.5f, -.5f,
-	-.5f, -.5f, .5f,
-	-.5f, .5f, -.5f,
-	-.5f, .5f, .5f,
-	
-	.5f, -.5f, -.5f,
-	.5f, -.5f, .5f,
-	.5f, .5f, -.5f,
-	.5f, .5f, .5f
+	0.f, 0.f, 0.f,
+	0.f, 0.f, 1.f,
+	0.f, 1.f, 0.f,
+	0.f, 1.f, 1.f,
+
+	1.f, 0.f, 0.f,
+	1.f, 0.f, 1.f,
+	1.f, 1.f, 0.f,
+	1.f, 1.f, 1.f
+
+	//-.5f, -.5f, -.5f,
+	//-.5f, -.5f, .5f,
+	//-.5f, .5f, -.5f,
+	//-.5f, .5f, .5f,
+	//
+	//.5f, -.5f, -.5f,
+	//.5f, -.5f, .5f,
+	//.5f, .5f, -.5f,
+	//.5f, .5f, .5f
 };
 
 // NOTE: Is that a cube ?!
 static uint32_t		ys_cube_indices[] =
 {
-	0, 1, 2,	2, 1, 3,
-	7, 6, 5,	5, 6, 4,
-	1, 5, 2,	2, 5, 7,
-	4, 0, 6,	6, 0, 1,
-	0, 4, 1,	1, 4, 5,
-	3, 7, 2,	2, 7, 6
+	0, 6, 4,	0, 2, 6,
+	0, 4, 2,	0, 1, 3,
+	2, 7, 6,	2, 3, 7,
+	4, 6, 7,	4, 7, 5,
+	0, 4, 5,	0, 5, 1,
+	1, 5, 7,	1, 7, 3
+
+	//0, 1, 2,	2, 1, 3,
+	//7, 6, 5,	5, 6, 4,
+	//1, 5, 2,	2, 5, 7,
+	//4, 0, 6,	6, 0, 1,
+	//0, 4, 1,	1, 4, 5,
+	//3, 7, 2,	2, 7, 6
 };
 
 static float		ys_matrix_identity[] =
+{
+	1.f, 0.f, 0.f, 0.f,
+	0.f, 1.f, 0.f, 0.f,
+	0.f, 0.f, 1.f, 0.f,
+	0.f, 0.f, 0.f, 1.f
+};
+
+static float		ys_matrix_projection[] =
 {
 	1.f, 0.f, 0.f, 0.f,
 	0.f, 1.f, 0.f, 0.f,
@@ -191,7 +216,7 @@ static float		ys_cube_world[] =
 	1.f, 0.f, 0.f, 0.f,
 	0.f, 1.f, 0.f, 0.f,
 	0.f, 0.f, 1.f, 0.f,
-	0.f, 0.f, 5.f, 1.f
+	0.f, 0.f, -5.f, 1.f
 };
 
 
@@ -228,6 +253,11 @@ static uint32_t	vk_get_memory_type_index(const VkPhysicalDeviceMemoryProperties&
 VKAPI_ATTR VkBool32 VKAPI_CALL
 vk_debug_log(VkFlags, VkDebugReportObjectTypeEXT, uint64_t, size_t, int32_t,
 			 const char*, const char*, void*);
+
+#define DEG_TO_RAD 3.1415f / 360.f
+static void ys_compute_perspective(float* _matrix, 
+								   float _near_plane, float _far_plane,
+								   float _fov, float _aspect_ratio);
 
 static void
 create_window()
@@ -301,6 +331,9 @@ main(int, char**)
 int WINAPI 
 WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int)
 {
+	int i;
+	std::cin >> i;
+
 	// LATER: Add an argument parser in order to
 	//		 - enable/disable validation layers
 	MSG		msg;
@@ -343,12 +376,10 @@ WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int)
 static void
 ys_prepare_cube()
 {
-	VkResult error;
-
 	// INDEX BUFFER SETUP
 	{
 		YsBuffer&			ys_buffer_handl = ys_cube_index_buffer;
-		uint64_t			value_count = 36;
+		uint32_t			value_count = 36;
 		VkDeviceSize		buffer_size = value_count * sizeof(uint32_t);
 		VkBufferUsageFlags	buffer_usage = VK_BUFFER_USAGE_INDEX_BUFFER_BIT;
 		void*				p_host_memory = ys_cube_indices;
@@ -361,7 +392,7 @@ ys_prepare_cube()
 	// VERTEX BUFFER SETUP
 	{
 		YsBuffer&			ys_buffer_handl = ys_cube_vertex_buffer;
-		uint64_t			value_count = 8;
+		uint32_t			value_count = 8;
 		VkDeviceSize		buffer_size = value_count * sizeof(float);
 		VkBufferUsageFlags	buffer_usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
 		void*				p_host_memory = ys_cube_vertex;
@@ -457,9 +488,9 @@ vk_draw(SwapchainBuffer& buffer)
 {
 	// NEXT: Find why our cube is not drawn.
 	// Possible reasons :
-	//		[ ] Matrices
-	//		[ ] Cube data
-	//		[ ] Shader
+	//		[x] Matrices
+	//		[x] Cube data
+	//		[x] Shader
 	//		[ ] Pipeline setup
 	//		[ ] ???
 
@@ -579,7 +610,9 @@ vk_init()
 		{
 			VkExtensionProperties* instance_extensions = new VkExtensionProperties[instance_extension_count];
 
-			error = vkEnumerateInstanceExtensionProperties(nullptr, &instance_extension_count, instance_extensions);
+			error = vkEnumerateInstanceExtensionProperties(nullptr,
+														   &instance_extension_count, 
+														   instance_extensions);
 			assert(!error);
 
 			bool extensions_ok = true;
@@ -641,7 +674,8 @@ vk_init()
 		assert(!error && gpu_count);
 
 		VkPhysicalDevice* instance_physical_devices = new VkPhysicalDevice[gpu_count];
-		error = vkEnumeratePhysicalDevices(vk_instance, &gpu_count, instance_physical_devices);
+		error = vkEnumeratePhysicalDevices(vk_instance, &gpu_count,
+										   instance_physical_devices);
 		assert(!error);
 
 		vk_gpu = instance_physical_devices[0];
@@ -1122,7 +1156,7 @@ vk_prepare_resources()
 	// CREATE UNIFORM BUFFER
 	{
 		YsBuffer&			ys_buffer_handl = ys_matrix_buffer;
-		uint64_t			value_count = 16 * 3;
+		uint32_t			value_count = 16 * 3;
 		VkDeviceSize		buffer_size = value_count * sizeof(float);
 		VkBufferUsageFlags	buffer_usage = VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
 
@@ -1153,6 +1187,9 @@ vk_prepare_resources()
 		
 		p_host_memory = ys_matrix_identity;
 		ys_buffer_set(ys_buffer_handl, p_host_memory, matrix_size, matrix_size);
+
+		ys_compute_perspective(ys_matrix_projection, 0.1f, 1000.f, 90.f, 800.f/600.f);
+		p_host_memory = ys_matrix_projection;
 		ys_buffer_set(ys_buffer_handl, p_host_memory, matrix_size, matrix_size * 2);
 	}
 }
@@ -1399,8 +1436,8 @@ vk_prepare_pipeline()
 		rs_info.depthClampEnable = VK_FALSE;
 		rs_info.rasterizerDiscardEnable = VK_FALSE;
 		rs_info.polygonMode = VK_POLYGON_MODE_LINE;
-		rs_info.cullMode = VK_CULL_MODE_BACK_BIT;
-		rs_info.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+		rs_info.cullMode = VK_CULL_MODE_NONE;//	VK_CULL_MODE_FRONT_BIT;
+		rs_info.frontFace =	VK_FRONT_FACE_COUNTER_CLOCKWISE;
 		rs_info.depthBiasEnable = VK_FALSE;
 		rs_info.depthBiasConstantFactor = 0.f;
 		rs_info.depthBiasClamp = 0.f;
@@ -1889,4 +1926,26 @@ vk_debug_log(VkFlags msg_flags,
 	return false;
 }
 
+
+static void ys_compute_perspective(float* _matrix,
+								   float _near_plane, float _far_plane,
+								   float _fov, float _aspect_ratio)
+{
+	float xymax = _near_plane * (float)tan(_fov * (DEG_TO_RAD));
+	float width = 2 * xymax;
+
+	float depth = _far_plane - _near_plane;
+	float q = -(_far_plane + _near_plane) / depth;
+	float qn = -2 * (_far_plane * _near_plane) / depth;
+
+	float w = (2 * _near_plane / width) / _aspect_ratio;
+	float h = 2 * _near_plane / width;
+
+	_matrix[0] = w;
+	_matrix[5] = h;
+	_matrix[10] = q;
+	_matrix[11] = -1.f;
+	_matrix[14] = qn;
+	_matrix[15] = 0.f;
+}
 
