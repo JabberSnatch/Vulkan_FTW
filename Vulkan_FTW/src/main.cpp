@@ -33,6 +33,7 @@ using Bitfield32_t = uint32_t;
 
 struct SwapchainBuffer
 {
+	uint32_t			index;
 	VkImage				image;
 	VkCommandBuffer		cmd;
 	VkImageView			view;
@@ -116,6 +117,7 @@ static VkColorSpaceKHR			vk_color_space;
 static VkSwapchainKHR			vk_swapchain;
 static uint32_t					vk_swapchain_image_count;
 static SwapchainBuffer*			vk_swapchain_buffers;
+static SwapchainBuffer*			vk_swapchain_current_buffer;
 
 static DepthBuffer				vk_depth_buffer;
 
@@ -189,7 +191,7 @@ static float		ys_cube_world[] =
 	1.f, 0.f, 0.f, 0.f,
 	0.f, 1.f, 0.f, 0.f,
 	0.f, 0.f, 1.f, 0.f,
-	0.f, 0.f, -5.f, 1.f
+	0.f, 0.f, 5.f, 1.f
 };
 
 
@@ -204,7 +206,7 @@ static void ys_buffer_allocate(YsBuffer&, VkDeviceSize, VkBufferUsageFlags);
 static void ys_buffer_set(YsBuffer&, void*, VkDeviceSize, VkDeviceSize = 0);
 
 static void vk_run();
-static void vk_draw();
+static void vk_draw(SwapchainBuffer&);
 
 static void vk_init();
 static void vk_setup_debug_report_callback();
@@ -277,6 +279,7 @@ WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 	case WM_PAINT:
 		// DRAW HERE
 		// NEXT
+		vk_run();
 		// NOTE: cube.c:2007
 		break;
 	case WM_SIZE:
@@ -298,6 +301,9 @@ main(int, char**)
 int WINAPI 
 WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int)
 {
+	int i;
+	std::cin >> i;
+
 	// LATER: Add an argument parser in order to
 	//		 - enable/disable validation layers
 	MSG		msg;
@@ -438,15 +444,28 @@ vk_run()
 {
 	vkDeviceWaitIdle(vk_device);
 
-	vk_draw();
+	vk_draw(*vk_swapchain_current_buffer);
+	
+	uint32_t next_buffer = vk_swapchain_current_buffer->index + 1;
+	while (next_buffer >= vk_swapchain_image_count)
+		next_buffer -= vk_swapchain_image_count;
+	vk_swapchain_current_buffer = vk_swapchain_buffers + next_buffer;
 
 	vkDeviceWaitIdle(vk_device);
 }
 
 
 static void
-vk_draw()
+vk_draw(SwapchainBuffer& buffer)
 {
+	// NEXT: Find why our cube is not drawn.
+	// Possible reasons :
+	//		[ ] Matrices
+	//		[ ] Cube data
+	//		[ ] Shader
+	//		[ ] Pipeline setup
+	//		[ ] ???
+
 	VkResult error;
 	
 	VkSemaphore present_complete_semaphore;
@@ -461,13 +480,51 @@ vk_draw()
 		assert(!error);
 	}
 
-/*
 	error = fp.AcquireNextImageKHR(vk_device, vk_swapchain, UINT64_MAX, 
 								   present_complete_semaphore,
 								   VK_NULL_HANDLE,
-								   )
-*/
-	// NEXT: Give a current buffer to vk_draw, and update it over time. cube.c:720
+								   &buffer.index);
+	if (error == VK_ERROR_OUT_OF_DATE_KHR)
+	{
+		// NOTE: This error signals that the swapchain is out of date.
+	}
+	else { assert(!error); }
+
+	vk_flush_global_command_buffer();
+
+	VkPipelineStageFlags wait_stage = VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT;
+	VkSubmitInfo submit_info;
+	submit_info.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+	submit_info.pNext = nullptr;
+	submit_info.waitSemaphoreCount = 1;
+	submit_info.pWaitSemaphores = &present_complete_semaphore;
+	submit_info.pWaitDstStageMask = &wait_stage;
+	submit_info.commandBufferCount = 1;
+	submit_info.pCommandBuffers = &buffer.cmd;
+	submit_info.signalSemaphoreCount = 0;
+	submit_info.pSignalSemaphores = nullptr;
+
+	error = vkQueueSubmit(vk_main_queue, 1, &submit_info, VK_NULL_HANDLE);
+	assert(!error);
+
+	VkPresentInfoKHR present_info;
+	present_info.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
+	present_info.pNext = nullptr;
+	present_info.waitSemaphoreCount = 0;
+	present_info.pWaitSemaphores = nullptr;
+	present_info.swapchainCount = 1;
+	present_info.pSwapchains = &vk_swapchain;
+	present_info.pImageIndices = &buffer.index;
+	present_info.pResults = nullptr;
+
+	error = fp.QueuePresentKHR(vk_main_queue, &present_info);
+	// NOTE: See the call to AcquireNextImageKHR earlier in this function.
+	assert(!error); 
+
+	error = vkQueueWaitIdle(vk_main_queue);
+	assert(!error);
+
+	vkDestroySemaphore(vk_device, present_complete_semaphore, nullptr);
 }
 
 static void
@@ -940,9 +997,11 @@ vk_prepare_resources()
 		assert(!error);
 
 		vk_swapchain_buffers = new SwapchainBuffer[vk_swapchain_image_count];
-
+		vk_swapchain_current_buffer = vk_swapchain_buffers;
+		
 		for (uint32_t i = 0; i < vk_swapchain_image_count; ++i)
 		{
+			vk_swapchain_buffers[i].index = i;
 			vk_swapchain_buffers[i].image = swapchain_images[i];
 
 			VkImageViewCreateInfo image_view_info;
@@ -1342,7 +1401,7 @@ vk_prepare_pipeline()
 		rs_info.flags = 0;
 		rs_info.depthClampEnable = VK_FALSE;
 		rs_info.rasterizerDiscardEnable = VK_FALSE;
-		rs_info.polygonMode = VK_POLYGON_MODE_FILL;
+		rs_info.polygonMode = VK_POLYGON_MODE_LINE;
 		rs_info.cullMode = VK_CULL_MODE_BACK_BIT;
 		rs_info.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
 		rs_info.depthBiasEnable = VK_FALSE;
