@@ -156,28 +156,27 @@ static YsBuffer		ys_matrix_buffer;
 
 static float		ys_cube_vertex[] = 
 {
-	0.f, 0.f, 0.f,
-	0.f, 0.f, 1.f,
-	0.f, 1.f, 0.f,
-	0.f, 1.f, 1.f,
-	
-	1.f, 0.f, 0.f,
-	1.f, 0.f, 1.f,
-	1.f, 1.f, 0.f,
-	1.f, 1.f, 1.f
-
-	//-.5f, -.5f, -.5f,
-	//-.5f, -.5f, .5f,
-	//-.5f, .5f, -.5f,
-	//-.5f, .5f, .5f,
+	//0.f, 0.f, 0.f,
+	//0.f, 0.f, 1.f,
+	//0.f, 1.f, 0.f,
+	//0.f, 1.f, 1.f,
 	//
-	//.5f, -.5f, -.5f,
-	//.5f, -.5f, .5f,
-	//.5f, .5f, -.5f,
-	//.5f, .5f, .5f
+	//1.f, 0.f, 0.f,
+	//1.f, 0.f, 1.f,
+	//1.f, 1.f, 0.f,
+	//1.f, 1.f, 1.f
+
+	-.5f, -.5f, -.5f,
+	-.5f, -.5f, .5f,
+	-.5f, .5f, -.5f,
+	-.5f, .5f, .5f,
+	
+	.5f, -.5f, -.5f,
+	.5f, -.5f, .5f,
+	.5f, .5f, -.5f,
+	.5f, .5f, .5f
 };
 
-// NOTE: Is that a cube ?!
 static uint32_t		ys_cube_indices[] =
 {
 	0, 6, 4,	0, 2, 6,
@@ -389,7 +388,7 @@ ys_prepare_cube()
 	// VERTEX BUFFER SETUP
 	{
 		YsBuffer&			ys_buffer_handl = ys_cube_vertex_buffer;
-		uint32_t			value_count = 8;
+		uint32_t			value_count = 8 * 3;
 		VkDeviceSize		buffer_size = value_count * sizeof(float);
 		VkBufferUsageFlags	buffer_usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
 		void*				p_host_memory = ys_cube_vertex;
